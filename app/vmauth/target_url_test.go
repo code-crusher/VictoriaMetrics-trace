@@ -248,12 +248,12 @@ func TestCreateTargetURLSuccess(t *testing.T) {
 		DropSrcPathPrefixParts: new(2),
 	}
 	f(ui, "http://host42/vmsingle/api/v1/query?query=up&db=foo", "http://vmselect/0/prometheus/api/v1/query?db=foo&query=up",
-		"xx: aa\nyy: asdf", "qwe: rty", []int{503, 500, 501}, "first_available", 1)
+		"bb: aaa\nxx: aa\nyy: asdf", "x: y\nqwe: rty", []int{503, 500, 501}, "first_available", 1)
 	f(ui, "http://host123/vmsingle/api/v1/query?query=up", "http://default-server/v1/query?query=up",
 		"bb: aaa", "x: y", []int{502}, "least_loaded", 2)
-	f(ui, "https://foo-host/api/v1/write", "http://vminsert/0/prometheus/api/v1/write", "", "", []int{}, "least_loaded", 0)
+	f(ui, "https://foo-host/api/v1/write", "http://vminsert/0/prometheus/api/v1/write", "bb: aaa", "x: y", []int{}, "least_loaded", 0)
 	f(ui, "https://foo-host/foo/bar/api/v1/query_range", "http://default-server/api/v1/query_range", "bb: aaa", "x: y", []int{502}, "least_loaded", 2)
-	f(ui, "https://foo-host/metrics", "http://metrics-server", "", "", []int{502}, "least_loaded", 2)
+	f(ui, "https://foo-host/metrics", "http://metrics-server", "bb: aaa", "x: y", []int{502}, "least_loaded", 2)
 
 	// Complex routing with `url_map` without global url_prefix
 	ui = &UserInfo{
@@ -280,8 +280,8 @@ func TestCreateTargetURLSuccess(t *testing.T) {
 		RetryStatusCodes:       []int{502},
 		DropSrcPathPrefixParts: new(2),
 	}
-	f(ui, "https://foo-host/api/v1/write", "http://vminsert/0/prometheus/api/v1/write", "", "", []int{}, "least_loaded", 0)
-	f(ui, "https://foo-host/metrics/a/b", "http://metrics-server/b", "", "", []int{502}, "least_loaded", 2)
+	f(ui, "https://foo-host/api/v1/write", "http://vminsert/0/prometheus/api/v1/write", "bb: aaa", "x: y", []int{}, "least_loaded", 0)
+	f(ui, "https://foo-host/metrics/a/b", "http://metrics-server/b", "bb: aaa", "x: y", []int{502}, "least_loaded", 2)
 
 	// `deny_paths` excludes a subset of paths matched by `src_paths`
 	ui = &UserInfo{
@@ -598,3 +598,87 @@ func TestMergeURLs(t *testing.T) {
 	// allow overriding the selected query args
 	f("http://foo:1234/x/y?baz=xxx&qqq=www", "https://backend/foo/bar?baz=abc", 0, []string{"baz"}, "https://backend/foo/bar/x/y?baz=abc&baz=xxx&qqq=www")
 }
+
+func TestMergeHeadersConf(t *testing.T) {
+	f := func(dst, src HeadersConf, resultExpected HeadersConf) {
+		t.Helper()
+
+		result := mergeHeadersConf(dst, src)
+		if s := headersToString(result.RequestHeaders); s != headersToString(resultExpected.RequestHeaders) {
+			t.Fatalf("unexpected request headers; got %q; want %q", s, headersToString(resultExpected.RequestHeaders))
+		}
+		if s := headersToString(result.ResponseHeaders); s != headersToString(resultExpected.ResponseHeaders) {
+			t.Fatalf("unexpected response headers; got %q; want %q", s, headersToString(resultExpected.ResponseHeaders))
+		}
+		if (result.KeepOriginalHost == nil) != (resultExpected.KeepOriginalHost == nil) {
+			t.Fatalf("unexpected KeepOriginalHost; got %v; want %v", result.KeepOriginalHost, resultExpected.KeepOriginalHost)
+		}
+		if result.hasAnyPlaceHolders != resultExpected.hasAnyPlaceHolders {
+			t.Fatalf("unexpected hasAnyPlaceHolders; got %v; want %v", result.hasAnyPlaceHolders, resultExpected.hasAnyPlaceHolders)
+		}
+
+		// The merge must be idempotent.
+		result2 := mergeHeadersConf(result, result)
+		if s := headersToString(result2.RequestHeaders); s != headersToString(result.RequestHeaders) {
+			t.Fatalf("merge is not idempotent for request headers; got %q; want %q", s, headersToString(result.RequestHeaders))
+		}
+		if s := headersToString(result2.ResponseHeaders); s != headersToString(result.ResponseHeaders) {
+			t.Fatalf("merge is not idempotent for response headers; got %q; want %q", s, headersToString(result.ResponseHeaders))
+		}
+	}
+
+	// empty src doesn't change dst
+	f(HeadersConf{}, HeadersConf{}, HeadersConf{})
+	f(HeadersConf{
+		RequestHeaders:  []*Header{mustNewHeader("'aa: bb'")},
+		ResponseHeaders: []*Header{mustNewHeader("'cc: dd'")},
+	}, HeadersConf{}, HeadersConf{
+		RequestHeaders:  []*Header{mustNewHeader("'aa: bb'")},
+		ResponseHeaders: []*Header{mustNewHeader("'cc: dd'")},
+	})
+
+	// src with empty headers doesn't change dst
+	f(HeadersConf{
+		RequestHeaders: []*Header{mustNewHeader("'aa: bb'")},
+	}, HeadersConf{
+		RequestHeaders: []*Header{mustNewHeader("'ee:'")},
+	}, HeadersConf{
+		RequestHeaders: []*Header{mustNewHeader("'aa: bb'"), mustNewHeader("'ee:'")},
+	})
+
+	// headers from src are appended after headers from dst,
+	// so they take precedence for headers with the same name
+	f(HeadersConf{
+		RequestHeaders:  []*Header{mustNewHeader("'AccountID: 1'"), mustNewHeader("'Foo: bar'")},
+		ResponseHeaders: []*Header{mustNewHeader("'X: y'")},
+	}, HeadersConf{
+		RequestHeaders:  []*Header{mustNewHeader("'AccountID: 42'")},
+		ResponseHeaders: []*Header{mustNewHeader("'Z: w'")},
+	}, HeadersConf{
+		RequestHeaders:  []*Header{mustNewHeader("'AccountID: 1'"), mustNewHeader("'Foo: bar'"), mustNewHeader("'AccountID: 42'")},
+		ResponseHeaders: []*Header{mustNewHeader("'X: y'"), mustNewHeader("'Z: w'")},
+	})
+
+	// hasAnyPlaceHolders is propagated
+	f(HeadersConf{
+		RequestHeaders:     []*Header{mustNewHeader("'AccountID: 1'")},
+		hasAnyPlaceHolders: true,
+	}, HeadersConf{
+		RequestHeaders: []*Header{mustNewHeader("'ProjectID: 2'")},
+	}, HeadersConf{
+		RequestHeaders:     []*Header{mustNewHeader("'AccountID: 1'"), mustNewHeader("'ProjectID: 2'")},
+		hasAnyPlaceHolders: true,
+	})
+
+	// KeepOriginalHost from src takes precedence
+	keepHostSrc := true
+	keepHostDst := false
+	f(HeadersConf{
+		KeepOriginalHost: &keepHostDst,
+	}, HeadersConf{
+		KeepOriginalHost: &keepHostSrc,
+	}, HeadersConf{
+		KeepOriginalHost: &keepHostSrc,
+	})
+}
+

@@ -180,6 +180,40 @@ type HeadersConf struct {
 	hasAnyPlaceHolders bool
 }
 
+// mergeHeadersConf returns the result of merging dst with src.
+//
+// The headers from src take precedence over the headers from dst when they have the same name,
+// since src is expected to be more specific than dst.
+// The headers from dst are skipped if they are already present in src by pointer,
+// so the merge is idempotent.
+// It is safe to modify the returned result.
+func mergeHeadersConf(dst, src HeadersConf) HeadersConf {
+	if len(src.RequestHeaders) == 0 && len(src.ResponseHeaders) == 0 && src.KeepOriginalHost == nil {
+		return dst
+	}
+	rhs := make([]*Header, 0, len(dst.RequestHeaders)+len(src.RequestHeaders))
+	for _, h := range dst.RequestHeaders {
+		if !slices.Contains(src.RequestHeaders, h) {
+			rhs = append(rhs, h)
+		}
+	}
+	rhs = append(rhs, src.RequestHeaders...)
+	dst.RequestHeaders = rhs
+	rhs = make([]*Header, 0, len(dst.ResponseHeaders)+len(src.ResponseHeaders))
+	for _, h := range dst.ResponseHeaders {
+		if !slices.Contains(src.ResponseHeaders, h) {
+			rhs = append(rhs, h)
+		}
+	}
+	rhs = append(rhs, src.ResponseHeaders...)
+	dst.ResponseHeaders = rhs
+	if src.KeepOriginalHost != nil {
+		dst.KeepOriginalHost = src.KeepOriginalHost
+	}
+	dst.hasAnyPlaceHolders = dst.hasAnyPlaceHolders || src.hasAnyPlaceHolders
+	return dst
+}
+
 func (ui *UserInfo) beginConcurrencyLimit(ctx context.Context) error {
 	select {
 	case ui.concurrencyLimitCh <- struct{}{}:
@@ -1207,7 +1241,8 @@ func (ui *UserInfo) initURLs() error {
 		}
 	}
 
-	for _, e := range ui.URLMaps {
+	for i := range ui.URLMaps {
+		e := &ui.URLMaps[i]
 		if len(e.SrcPaths) == 0 && len(e.SrcHosts) == 0 && len(e.SrcQueryArgs) == 0 && len(e.SrcHeaders) == 0 {
 			if len(e.DenyPaths) > 0 {
 				return fmt.Errorf("`deny_paths` cannot be used without at least one of `src_paths`, `src_hosts`, `src_query_args` or `src_headers` in `url_map`")
@@ -1220,6 +1255,10 @@ func (ui *UserInfo) initURLs() error {
 		if err := e.URLPrefix.sanitizeAndInitialize(); err != nil {
 			return err
 		}
+		// Apply the user-level headers to the given `url_map` entry.
+		// The headers defined at the `url_map` entry level take precedence over the user-level headers,
+		// since they are more specific. See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/11594
+		e.HeadersConf = mergeHeadersConf(ui.HeadersConf, e.HeadersConf)
 		rscs := retryStatusCodes
 		lbp := loadBalancingPolicy
 		mqa := mergeQueryArgs

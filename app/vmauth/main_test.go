@@ -45,6 +45,12 @@ func TestRequestHandler(t *testing.T) {
 		r.Header.Set("Connection", "Some-Header,Other-Header")
 		r.Header.Set("Some-Header", "foobar")
 		r.Header.Set("Pass-Header", "abc")
+		// Simulate a malicious client, which tries to access arbitrary tenants
+		// by spoofing AccountID and ProjectID headers.
+		// vmauth must override these headers with the values from the auth config.
+		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/11594
+		r.Header.Set("AccountID", "42")
+		r.Header.Set("ProjectID", "43")
 
 		w := &fakeResponseWriter{}
 		if !requestHandlerWithInternalRoutes(w, r) {
@@ -80,7 +86,9 @@ unauthorized_user:
 statusCode=200
 Foo: bar
 requested_url={BACKEND}/foo/abc/def?bar=baz&some_arg=some_value
+Accountid: 42
 Pass-Header: abc
+Projectid: 43
 User-Agent: vmauth
 X-Forwarded-For: 12.34.56.78, 42.2.3.84`
 	f(cfgStr, requestURL, backendHandler, responseExpected)
@@ -109,7 +117,9 @@ unauthorized_user:
 statusCode=200
 Foo: bar
 requested_url={BACKEND}/default?request_path=http%3A%2F%2Fsome-host.com%2Fabc%2Fdef%3Fsome_arg%3Dsome_value
+Accountid: 42
 Pass-Header: abc
+Projectid: 43
 User-Agent: vmauth
 X-Forwarded-For: 12.34.56.78, 42.2.3.84`
 	f(cfgStr, requestURL, backendHandler, responseExpected)
@@ -288,6 +298,76 @@ statusCode=200
 requested_url={BACKEND}/bar/a/b`
 	f(cfgStr, requestURL, backendHandler, responseExpected)
 
+	// user-level headers are applied to requests routed via matching `url_map` entry,
+	// so the client cannot override them with its own headers.
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/11594
+	cfgStr = `
+users:
+- username: foo
+  password: secret
+  headers:
+  - "AccountID: 1"
+  - "ProjectID: 2"
+  url_map:
+  - src_paths:
+    - "/vlogs/select/.*"
+    drop_src_path_prefix_parts: 1
+    url_prefix: "{BACKEND}"`
+	requestURL = "http://foo:secret@some-host.com/vlogs/select/vmui/"
+	backendHandler = func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "requested_url=http://%s%s\nAccountID=%s\nProjectID=%s", r.Host, r.URL, r.Header.Get("AccountID"), r.Header.Get("ProjectID"))
+	}
+	responseExpected = `
+statusCode=200
+requested_url={BACKEND}/select/vmui/?extra_arg=extra_value
+AccountID=1
+ProjectID=2`
+	f(cfgStr, requestURL+"?extra_arg=extra_value", backendHandler, responseExpected)
+
+	// user-level headers are overridden by headers defined at the `url_map` entry level,
+	// but they are still applied to headers, which aren't overridden at the `url_map` entry level.
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/11594
+	cfgStr = `
+users:
+- username: foo
+  password: secret
+  headers:
+  - "AccountID: 1"
+  - "ProjectID: 2"
+  url_map:
+  - src_paths:
+    - "/vlogs/select/.*"
+    headers:
+    - "AccountID: 42"
+    drop_src_path_prefix_parts: 1
+    url_prefix: "{BACKEND}"`
+	requestURL = "http://foo:secret@some-host.com/vlogs/select/vmui/"
+	responseExpected = `
+statusCode=200
+requested_url={BACKEND}/select/vmui/?extra_arg=extra_value
+AccountID=42
+ProjectID=2`
+	f(cfgStr, requestURL+"?extra_arg=extra_value", backendHandler, responseExpected)
+
+	// user-level headers are applied to requests routed via user-level url_prefix,
+	// so the client cannot override them with its own headers.
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/11594
+	cfgStr = `
+users:
+- username: foo
+  password: secret
+  headers:
+  - "AccountID: 1"
+  - "ProjectID: 2"
+  url_prefix: "{BACKEND}/select/"`
+	requestURL = "http://foo:secret@some-host.com/vlogs/select/vmui/"
+	responseExpected = `
+statusCode=200
+requested_url={BACKEND}/select/vlogs/select/vmui/?extra_arg=extra_value
+AccountID=1
+ProjectID=2`
+	f(cfgStr, requestURL+"?extra_arg=extra_value", backendHandler, responseExpected)
+
 	// correct authorization but unexisted path, hence missing route error.
 	cfgStr = `
 users:
@@ -462,8 +542,10 @@ unauthorized_user:
 	}
 	responseExpected = `
 statusCode=400
-user unauthorized missing route for "http://some-host.com/abc?de=fg" (host: "some-host.com"; path: "/abc"; args: "de=fg"; headers:Connection: Some-Header,Other-Header
+user unauthorized missing route for "http://some-host.com/abc?de=fg" (host: "some-host.com"; path: "/abc"; args: "de=fg"; headers:Accountid: 42
+Connection: Some-Header,Other-Header
 Pass-Header: abc
+Projectid: 43
 Some-Header: foobar
 X-Forwarded-For: 12.34.56.78
 )`
@@ -609,7 +691,9 @@ unauthorized_user:
 statusCode=200
 Foo: bar
 requested_url={BACKEND}/foo/abc/def?bar=baz&extra_filters=&extra_filters%5B%5D=&extra_label=&some_arg=some_value
+Accountid: 42
 Pass-Header: abc
+Projectid: 43
 User-Agent: vmauth
 X-Forwarded-For: 12.34.56.78, 42.2.3.84`
 	f(cfgStr, requestURL, backendHandler, responseExpected)
@@ -1297,6 +1381,69 @@ users:
         - "AccountID: {{.LogsAccountID}}"
         - "ProjectID: {{.LogsProjectID}}"
       url_prefix: {BACKEND}/select/logsql/?extra_filters={{.LogsExtraFilters}}&extra_stream_filters={{.LogsExtraStreamFilters}}`, jt.PublicKeyPEM),
+		request,
+		responseExpected,
+	)
+
+	// user-level headers with placeholders are applied to requests routed via matching `url_map` entry
+	// even if the entry defines no headers.
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/11594
+	request = httptest.NewRequest(`GET`, "http://some-host.com/query", nil)
+	request.Header.Set(`Authorization`, `Bearer `+fullToken)
+	request.Header.Set(`AccountID`, `aUserAccountID`)
+	request.Header.Set(`ProjectID`, `aUserProjectID`)
+	responseExpected = `
+statusCode=200
+path: /select/logsql/query
+query:
+headers:
+    AccountID=345
+    ProjectID=456`
+	f(fmt.Sprintf(
+		`
+users:
+- jwt:
+    public_keys:
+    - %q
+  headers:
+    - "AccountID: {{.LogsAccountID}}"
+    - "ProjectID: {{.LogsProjectID}}"
+  url_map:
+    - src_paths: ["/query"]
+      url_prefix: {BACKEND}/select/logsql`, jt.PublicKeyPEM),
+		request,
+		responseExpected,
+	)
+
+	// headers with placeholders defined at the `url_map` entry level take precedence
+	// over user-level headers with the same name,
+	// while the user-level headers are still applied for the rest of headers.
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/11594
+	request = httptest.NewRequest(`GET`, "http://some-host.com/query", nil)
+	request.Header.Set(`Authorization`, `Bearer `+fullToken)
+	request.Header.Set(`AccountID`, `aUserAccountID`)
+	request.Header.Set(`ProjectID`, `aUserProjectID`)
+	responseExpected = `
+statusCode=200
+path: /select/logsql/query
+query:
+headers:
+    AccountID=777
+    ProjectID=456`
+	f(fmt.Sprintf(
+		`
+users:
+- jwt:
+    public_keys:
+    - %q
+  headers:
+    - "AccountID: {{.LogsAccountID}}"
+    - "ProjectID: {{.LogsProjectID}}"
+  url_map:
+    - src_paths: ["/query"]
+      headers:
+        - "AccountID: 777"
+      url_prefix: {BACKEND}/select/logsql`, jt.PublicKeyPEM),
 		request,
 		responseExpected,
 	)

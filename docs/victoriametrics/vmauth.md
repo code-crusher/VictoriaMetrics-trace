@@ -1230,6 +1230,12 @@ users:
           - "http://backend:9428/"
 ```
 
+The user-level `headers` and `response_headers` options are also applied to requests routed via matching [`url_map`](#routing-by-path) entries.
+Headers, which are defined at the `url_map` entry level, take precedence over the user-level headers with the same name,
+since they are more specific. This allows restricting the client to a single tenant by defining `AccountID` and `ProjectID` headers at the user level,
+so the client cannot override them with its own headers no matter which `url_map` entry matches the request.
+See [security](#security) for details.
+
 `vmauth` also supports setting and removing HTTP response headers before returning the response from the backend to the client.
 This is done via the `response_headers` option. For example, the following [`-auth.config`](#auth-config) sets `Foo: bar` response header
 and removes the `Server` response header before returning the response to the client:
@@ -1778,6 +1784,8 @@ To enable TLS on the public listener while keeping the internal listener non-TLS
           - "AccountID: 2"
           - "ProjectID: 0"
     ```
+
+    The user-level `headers` are also applied to requests routed via matching `url_map` entries. Headers defined at the `url_map` entry level take precedence over the user-level headers with the same name. See [Modifying HTTP headers](#modifying-http-headers).
 
 1. Clients can spoof HTTP headers, so when `vmauth` is internet-facing, take the following precautions:
 
