@@ -82,6 +82,13 @@ func (*emptyBlockIterator) Error() error {
 	return nil
 }
 
+// PartialWarning implements vmselectapi.BlockIterator interface.
+//
+// The iterator never returns partial data, since it returns no data at all.
+func (*emptyBlockIterator) PartialWarning() string {
+	return ""
+}
+
 // marshalMetricBlock serializes a metric block in the format expected by
 // vmselect.
 //

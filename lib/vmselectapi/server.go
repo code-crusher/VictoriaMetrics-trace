@@ -420,6 +420,17 @@ func (ctx *vmselectRequestCtx) readBool() (bool, error) {
 	return v, nil
 }
 
+func (ctx *vmselectRequestCtx) writeBool(v bool) error {
+	b := byte(0)
+	if v {
+		b = 1
+	}
+	if _, err := ctx.bc.Write([]byte{b}); err != nil {
+		return fmt.Errorf("cannot write bool %v: %w", v, err)
+	}
+	return nil
+}
+
 func (ctx *vmselectRequestCtx) readByte() (byte, error) {
 	ctx.dataBuf = bytesutil.ResizeNoCopyMayOverallocate(ctx.dataBuf, 1)
 	if _, err := io.ReadFull(ctx.bc, ctx.dataBuf); err != nil {
@@ -565,6 +576,8 @@ func (s *Server) processRPC(ctx *vmselectRequestCtx, rpcName string) error {
 	switch rpcName {
 	case "search_v7":
 		return s.processSearch(ctx)
+	case "search_v8":
+		return s.processSearchPartialAware(ctx)
 	case "searchMetricNames_v3":
 		return s.processSearchMetricNames(ctx)
 	case "labelValues_v5":
@@ -1022,7 +1035,25 @@ func (s *Server) processSearchMetricNames(ctx *vmselectRequestCtx) error {
 	return nil
 }
 
+// processSearch processes the legacy search_v7 RPC. It doesn't send the
+// partial response state to vmselect, so vmselect cannot distinguish between
+// complete and incomplete responses. It is kept for compatibility with
+// vmselect nodes, which aren't aware of the search_v8 RPC yet.
 func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
+	return s.processSearchCommon(ctx, false)
+}
+
+// processSearchPartialAware processes the search_v8 RPC. It is the same as
+// search_v7, except that it sends the explicit partial response state to
+// vmselect after all the data blocks are sent, so vmselect can properly
+// propagate the partial state across multi-level cluster setups.
+//
+// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/10905
+func (s *Server) processSearchPartialAware(ctx *vmselectRequestCtx) error {
+	return s.processSearchCommon(ctx, true)
+}
+
+func (s *Server) processSearchCommon(ctx *vmselectRequestCtx, partialAware bool) error {
 	s.searchRequests.Inc()
 
 	// Read request.
@@ -1068,7 +1099,9 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 			if err := ctx.writeString(""); err != nil {
 				return fmt.Errorf("cannot send 'end of response' marker")
 			}
-			return nil
+			// The canceled response is incomplete by definition, so mark it
+			// as partial for the partial-aware protocol version.
+			return writePartialState(ctx, partialAware, "the request was canceled by client")
 		}
 		return err
 	}
@@ -1081,6 +1114,36 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 	// Send 'end of response' marker
 	if err := ctx.writeString(""); err != nil {
 		return fmt.Errorf("cannot send 'end of response' marker")
+	}
+
+	// Send the partial response state to vmselect after the 'end of response'
+	// marker for the partial-aware protocol version, so vmselect can
+	// distinguish between complete and incomplete responses and properly
+	// propagate the partial state to the upper-level vmselect nodes.
+	return writePartialState(ctx, partialAware, bi.PartialWarning())
+}
+
+// writePartialState sends the partial response state to vmselect for the
+// partial-aware search protocol version (search_v8).
+//
+// The state consists of the isPartial flag followed by the optional warning,
+// which describes the partial response source.
+//
+// The state is sent only if partialAware is set to true. Otherwise, the
+// legacy protocol version is used (search_v7), which has no way to send the
+// partial response state.
+func writePartialState(ctx *vmselectRequestCtx, partialAware bool, warning string) error {
+	if !partialAware {
+		return nil
+	}
+	if warning != "" {
+		ctx.qt.Printf("response is partial: %s", warning)
+	}
+	if err := ctx.writeBool(warning != ""); err != nil {
+		return fmt.Errorf("cannot send isPartial flag: %w", err)
+	}
+	if err := ctx.writeString(warning); err != nil {
+		return fmt.Errorf("cannot send partial response warning: %w", err)
 	}
 	return nil
 }

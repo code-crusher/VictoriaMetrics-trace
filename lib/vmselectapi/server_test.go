@@ -115,8 +115,9 @@ func TestSearchMetricNamesV3(t *testing.T) {
 // testBlockIterator is the fake implementation of BlockIterator
 // that is used in TestSearchV7().
 type testBlockIterator struct {
-	blocks [][]byte
-	closed bool
+	blocks         [][]byte
+	closed         bool
+	partialWarning string
 }
 
 func (bi *testBlockIterator) NextBlock(_ context.Context, dst []byte) ([]byte, bool) {
@@ -134,6 +135,10 @@ func (bi *testBlockIterator) MustClose() {
 
 func (bi *testBlockIterator) Error() error {
 	return nil
+}
+
+func (bi *testBlockIterator) PartialWarning() string {
+	return bi.partialWarning
 }
 
 // testSearchV7API is the fake implementation of the vmselect API
@@ -216,6 +221,79 @@ func TestSearchV7(t *testing.T) {
 	f([]string{"block1", "block2"}, "")
 	f(nil, "test error")
 	f([]string{"block1", "block2", "block3"}, "")
+}
+
+// TestSearchV8 verifies that the search_v8 RPC sends the explicit partial
+// response state to vmselect, so the top-level vmselect can distinguish
+// between complete and incomplete responses returned by lower-level vmselect
+// nodes in multi-level cluster setups.
+//
+// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/10905
+func TestSearchV8(t *testing.T) {
+	defer metrics.UnregisterAllMetrics()
+
+	api := &testSearchV7API{}
+	s := startServer(t, api)
+	defer s.MustStop()
+	c := newConn(t, s)
+	defer c.Close()
+
+	f := func(wantBlocks []string, wantErr, wantPartialWarning string) {
+		t.Helper()
+
+		api.Reset(wantBlocks, wantErr)
+		api.bi.partialWarning = wantPartialWarning
+
+		sq := newSearchQuery()
+
+		c.WriteRPCName("search_v8", false, 1)
+		c.WriteSearchQuery(sq)
+		if gotErr := c.ReadString(); gotErr != wantErr {
+			t.Fatalf("unexpected remote error: got %q, want %q", gotErr, wantErr)
+		}
+		if diff := cmp.Diff(sq, api.gotSearchQuery); diff != "" {
+			t.Fatalf("unexpected search query (-want, +got):\n%s", diff)
+		}
+		if wantErr != "" {
+			c.ReadEmptyTrace()
+			return
+		}
+
+		var gotBlocks []string
+		for {
+			b := c.ReadString()
+			if b == "" {
+				break
+			}
+			gotBlocks = append(gotBlocks, b)
+		}
+		if diff := cmp.Diff(wantBlocks, gotBlocks, cmpopts.EquateEmpty()); diff != "" {
+			t.Fatalf("unexpected blocks (-want, +got):\n%s", diff)
+		}
+
+		// Read the partial response state sent after the blocks.
+		gotIsPartial := c.ReadBool()
+		if wantIsPartial := wantPartialWarning != ""; gotIsPartial != wantIsPartial {
+			t.Fatalf("unexpected isPartial flag: got %v, want %v", gotIsPartial, wantIsPartial)
+		}
+		if gotPartialWarning := c.ReadString(); gotPartialWarning != wantPartialWarning {
+			t.Fatalf("unexpected partial warning: got %q, want %q", gotPartialWarning, wantPartialWarning)
+		}
+		c.ReadEmptyTrace()
+		if !api.bi.closed {
+			t.Fatalf("block iterator must be closed")
+		}
+	}
+
+	f([]string{}, "", "")
+	f([]string{"block1"}, "", "")
+	f([]string{"block1", "block2"}, "", "")
+	f(nil, "test error", "")
+	f([]string{"block1", "block2", "block3"}, "", "")
+	// Partial responses must be explicitly marked with isPartial=true and
+	// must carry the warning describing the partial response source.
+	f([]string{"block1"}, "", "some vmstorage nodes failed to respond")
+	f(nil, "", "the number of matching timeseries exceeds the limit")
 }
 
 // testLabelValuesV5API is the fake implementation of the vmselect API
@@ -1233,6 +1311,10 @@ func (bi *testClosedConnBlockIterator) Error() error {
 	return bi.err
 }
 
+func (bi *testClosedConnBlockIterator) PartialWarning() string {
+	return ""
+}
+
 func (api *testClosedConnAPI) SearchMetricNames(ctx context.Context, _ *querytracer.Tracer, _ *storage.SearchQuery) ([]string, error) {
 	return nil, api.waitCanceled(ctx)
 }
@@ -1437,6 +1519,10 @@ func (bi *testSearchV7CancelBlockIterator) Error() error {
 	return nil
 }
 
+func (bi *testSearchV7CancelBlockIterator) PartialWarning() string {
+	return ""
+}
+
 // testSearchV7CancelAPI is the fake implementation of the vmselect API
 // that is used in TestSearchV7Cancel().
 type testSearchV7CancelAPI struct {
@@ -1479,6 +1565,65 @@ func TestSearchV7Cancel(t *testing.T) {
 		_ = c.ReadString()
 		c.WriteString(handshake.CancelRequestMarker)
 		for c.ReadString() != "" {
+		}
+		c.ReadEmptyTrace()
+
+		if !api.bi.canceled {
+			t.Fatalf("block iterator was expected to be canceled but it wasn't")
+		}
+		if !api.bi.closed {
+			t.Fatalf("block iterator must be closed")
+		}
+	}
+
+	// Repeat the search with canceling several times to ensure that connection
+	// is reused.
+	search()
+	search()
+	search()
+	search()
+}
+
+// TestSearchV8Cancel verifies that a canceled search_v8 request is marked as
+// partial, so the partial response state is always sent to vmselect and the
+// response framing stays in sync.
+func TestSearchV8Cancel(t *testing.T) {
+	defer metrics.UnregisterAllMetrics()
+
+	api := &testSearchV7CancelAPI{}
+	s := startServer(t, api)
+	defer s.MustStop()
+	c := newConn(t, s)
+	defer c.Close()
+
+	search := func() {
+		t.Helper()
+
+		sq := newSearchQuery()
+		c.WriteRPCName("search_v8", false, 2)
+		c.WriteSearchQuery(sq)
+		if gotErr := c.ReadString(); gotErr != "" {
+			t.Fatalf("unexpected remote error: got %q, want empty", gotErr)
+		}
+
+		// Read several blocks, then send a request cancellation marker and
+		// drain the rest of blocks the server was able to write to the
+		// connection before it received the marker.
+		_ = c.ReadString()
+		_ = c.ReadString()
+		_ = c.ReadString()
+		_ = c.ReadString()
+		c.WriteString(handshake.CancelRequestMarker)
+		for c.ReadString() != "" {
+		}
+
+		// The canceled response is incomplete by definition, so it must be
+		// explicitly marked as partial.
+		if got := c.ReadBool(); !got {
+			t.Fatalf("unexpected isPartial flag: got false, want true")
+		}
+		if got := c.ReadString(); got == "" {
+			t.Fatalf("unexpected empty partial warning for the canceled request")
 		}
 		c.ReadEmptyTrace()
 
@@ -1689,6 +1834,15 @@ func (c *conn) ReadUint64() uint64 {
 		c.t.Fatalf("could not read uint64: %s", err)
 	}
 	return encoding.UnmarshalUint64(buf)
+}
+
+func (c *conn) ReadBool() bool {
+	c.t.Helper()
+	buf := make([]byte, 1)
+	if _, err := io.ReadFull(c.bc, buf); err != nil {
+		c.t.Fatalf("could not read bool: %s", err)
+	}
+	return buf[0] != 0
 }
 
 func newSearchQuery() *storage.SearchQuery {

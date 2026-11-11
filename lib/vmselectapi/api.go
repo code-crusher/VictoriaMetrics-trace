@@ -67,4 +67,15 @@ type BlockIterator interface {
 
 	// Error returns the last error occurred in NextBlock(), which returns false.
 	Error() error
+
+	// PartialWarning returns a non-empty warning if the data returned by the
+	// iterator is incomplete, i.e. the response must be marked as partial.
+	//
+	// It must return an empty string when the returned data is complete.
+	//
+	// It is called after NextBlock() returns false, so implementations may
+	// determine the partial state only by the end of the iteration.
+	//
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/10905
+	PartialWarning() string
 }

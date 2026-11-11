@@ -253,6 +253,14 @@ func (bi *blockIterator) Error() error {
 	return bi.sr.Error()
 }
 
+// PartialWarning implements vmselectapi.BlockIterator interface.
+//
+// vmstorage always returns either the complete data or an error, so the
+// returned data is never partial.
+func (bi *blockIterator) PartialWarning() string {
+	return ""
+}
+
 // GetSearch sets up an instance of storage search and returns it to the caller
 // along with the max series count that the search can return.
 //
