@@ -49,7 +49,7 @@ func MustStart(addr string, useProxyProtocol bool, insertHandler func(r io.Reade
 	}
 
 	logger.Infof("starting UDP InfluxDB server at %q", addr)
-	lnUDP, err := net.ListenPacket(netutil.GetUDPNetwork(), addr)
+	lnUDP, err := netutil.NewUDPListenPacket(netutil.GetUDPNetwork(), addr)
 	if err != nil {
 		logger.Fatalf("cannot start UDP InfluxDB server at %q: %s", addr, err)
 	}

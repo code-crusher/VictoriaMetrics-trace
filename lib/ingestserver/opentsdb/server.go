@@ -57,7 +57,7 @@ func MustStart(addr string, useProxyProtocol bool, telnetInsertHandler func(r io
 	httpServer := opentsdbhttp.MustServe(lnHTTP, httpInsertHandler)
 
 	logger.Infof("starting UDP OpenTSDB collector at %q", addr)
-	lnUDP, err := net.ListenPacket(netutil.GetUDPNetwork(), addr)
+	lnUDP, err := netutil.NewUDPListenPacket(netutil.GetUDPNetwork(), addr)
 	if err != nil {
 		logger.Fatalf("cannot start UDP OpenTSDB collector at %q: %s", addr, err)
 	}

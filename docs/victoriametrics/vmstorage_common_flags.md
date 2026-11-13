@@ -61,6 +61,8 @@ See the docs at https://docs.victoriametrics.com/victoriametrics/cluster-victori
      Whether to use pread() instead of mmap() for reading data files. By default, mmap() is used for 64-bit arches and pread() is used for 32-bit arches, since they cannot read data files bigger than 2^32 bytes in memory. mmap() is usually faster for reading small data chunks than pread()
   -fs.maxConcurrency int
      The maximum number of concurrent goroutines to work with files; smaller values may help reducing Go scheduling latency on systems with small number of CPU cores; higher values may help reducing data ingestion latency on systems with high-latency storage such as NFS or Ceph (default 16x CPU cores, capped at 256)
+  -freeBindAddress
+     Whether to set IP_FREEBIND option on listening sockets, so they can be bound to IP addresses, which do not exist yet on the host. This flag is supported only on Linux OSes.
   -futureRetention value
      Data with timestamps bigger than now+futureRetention is automatically deleted. The minimum futureRetention is 2 days. See https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#retention
      The following optional suffixes are supported: s (second), h (hour), d (day), w (week), M (month), y (year). If suffix isn't set, then the duration is counted in months (default 2d)

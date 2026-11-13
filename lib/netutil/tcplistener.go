@@ -1,6 +1,7 @@
 package netutil
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -14,6 +15,9 @@ import (
 )
 
 var enableTCP6 = flag.Bool("enableTCP6", false, "Whether to enable IPv6 for listening and dialing. By default, only IPv4 TCP and UDP are used")
+
+var freeBindAddress = flag.Bool("freeBindAddress", false, "Whether to set IP_FREEBIND option on listening sockets, "+
+	"so they can be bound to IP addresses, which do not exist yet on the host. "+freeBindOSNote)
 
 func isLonePort(s string) bool {
 	n := len(s)
@@ -40,7 +44,8 @@ func NewTCPListener(name, addr string, useProxyProtocol bool, tlsConfig *tls.Con
 		logger.Warnf("listening address %q looks like IPv6, but IPv6 is disabled; the server will listen on IPv4 only. "+
 			"Pass -enableTCP6 command-line flag to enable IPv6 support", addr)
 	}
-	ln, err := net.Listen(network, addr)
+	lc := newFreebindListenConfig()
+	ln, err := lc.Listen(context.Background(), network, addr)
 	if err != nil {
 		return nil, err
 	}
