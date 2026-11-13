@@ -1225,6 +1225,27 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 	defer promutil.PutLabels(labels)
 
 	mergeLabels(labels, swc, target, extraLabels, metaLabels)
+	// Extract optional basic auth credentials from the `user:pass@` part of `__address__`, so they aren't exposed
+	// in the `instance` label, at the `/targets` page and in scrape error messages.
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/9733
+	username, password := "", ""
+	extractCredentials := func() {
+		addressWithUserinfo := labels.Get("__address__")
+		if addressWithUserinfo == "" {
+			return
+		}
+		addressWithoutUserinfo, u, p := promrelabel.ExtractUserinfo(addressWithUserinfo)
+		if u == "" && p == "" {
+			return
+		}
+		username, password = u, p
+		if addressWithoutUserinfo == "" {
+			labels.Remove("__address__")
+		} else {
+			labels.Set("__address__", addressWithoutUserinfo)
+		}
+	}
+	extractCredentials()
 	var originalLabels *compressedLabels
 	if !*dropOriginalLabels {
 		originalLabels = newCompressedLabels(labels)
@@ -1232,6 +1253,8 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 	labels.Labels = swc.relabelConfigs.Apply(labels.Labels, 0)
 	// Remove labels starting from "__meta_" prefix according to https://www.robustperception.io/life-of-a-label/
 	labels.RemoveMetaLabels()
+	// Extract the credentials again, since relabeling could add them to `__address__`.
+	extractCredentials()
 
 	if labels.Len() == 0 {
 		// Drop target without labels.
@@ -1362,6 +1385,13 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 	// Reduce memory usage by interning all the strings in labels.
 	labelsCopy.InternStrings()
 
+	authConfig := swc.authConfig
+	if username != "" || password != "" {
+		// Apply per-target basic auth credentials extracted from the `user:pass@` part of `__address__`.
+		// They take precedence over the credentials from the `basic_auth` section at `scrape_config` level.
+		authConfig = authConfig.WithBasicAuth(username, password)
+	}
+
 	sw := &ScrapeWork{
 		ScrapeURL:            scrapeURL,
 		ScrapeInterval:       scrapeInterval,
@@ -1375,7 +1405,7 @@ func (swc *scrapeWorkConfig) getScrapeWork(target string, extraLabels, metaLabel
 		ExternalLabels:       swc.externalLabels,
 		ProxyURL:             swc.proxyURL,
 		ProxyAuthConfig:      swc.proxyAuthConfig,
-		AuthConfig:           swc.authConfig,
+		AuthConfig:           authConfig,
 		RelabelConfigs:       swc.relabelConfigs,
 		MetricRelabelConfigs: swc.metricRelabelConfigs,
 		DisableCompression:   swc.disableCompression,

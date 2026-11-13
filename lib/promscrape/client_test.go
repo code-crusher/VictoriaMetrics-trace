@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,52 @@ func newTestAuthConfig(t *testing.T, isTLS bool, ba *promauth.BasicAuthConfig) *
 		t.Fatalf("cannot setup promauth.Config: %s", err)
 	}
 	return ac
+}
+
+func TestClientPerTargetCredentials(t *testing.T) {
+	ctx := context.Background()
+
+	// The scrape target at `user:pass@host:port` must receive the credentials from the address.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ahExpected := "Basic " + base64.StdEncoding.EncodeToString([]byte("user:pass"))
+		if ah := r.Header.Get("Authorization"); ah != ahExpected {
+			w.WriteHeader(403)
+			fmt.Fprintf(w, "unexpected Authorization header; got %q; want %q", ah, ahExpected)
+			return
+		}
+		w.Write([]byte("metric_name{key=\"value\"} 123\n"))
+	}))
+	defer backend.Close()
+
+	sws, err := getStaticScrapeWork([]byte(fmt.Sprintf(`
+scrape_configs:
+- job_name: foo
+  static_configs:
+  - targets: ["user:pass@%s"]
+`, strings.TrimPrefix(backend.URL, "http://"))), "non-existing-file")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	if len(sws) != 1 {
+		t.Fatalf("unexpected number of ScrapeWork items; got %d; want 1", len(sws))
+	}
+	sw := sws[0]
+	if strings.Contains(sw.ScrapeURL, "pass") {
+		t.Fatalf("credentials mustn't be exposed in the scrape URL; got %q", sw.ScrapeURL)
+	}
+	if strings.Contains(sw.Labels.String(), "pass") {
+		t.Fatalf("credentials mustn't be exposed in target labels; got %s", sw.Labels.String())
+	}
+	sw.DisableKeepAlive = true
+
+	c, err := newClient(ctx, sw)
+	if err != nil {
+		t.Fatalf("failed to create client: %s", err)
+	}
+	var cb chunkedbuffer.Buffer
+	if _, err := c.ReadData(&cb); err != nil {
+		t.Fatalf("unexpected error at ReadData: %s", err)
+	}
 }
 
 func TestClientProxyReadOk(t *testing.T) {

@@ -204,6 +204,20 @@ func (x *Labels) Set(name, value string) {
 	x.Add(name, value)
 }
 
+// Remove removes all the labels with the given name from x.
+func (x *Labels) Remove(name string) {
+	src := x.Labels
+	dst := x.Labels[:0]
+	for _, label := range src {
+		if label.Name == name {
+			continue
+		}
+		dst = append(dst, label)
+	}
+	clear(src[len(dst):])
+	x.Labels = dst
+}
+
 // InternStrings interns all the strings used in x labels.
 func (x *Labels) InternStrings() {
 	labels := x.GetLabels()

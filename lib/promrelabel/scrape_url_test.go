@@ -60,3 +60,51 @@ func TestGetScrapeURL(t *testing.T) {
 	f(`{__address__="http://foo:80"}`, "http://foo:80/metrics", "foo:80")
 	f(`{__address__="https://foo:443"}`, "https://foo:443/metrics", "foo:443")
 }
+
+func TestExtractUserinfo(t *testing.T) {
+	f := func(address, addressExpected, usernameExpected, passwordExpected string) {
+		t.Helper()
+		addressResult, username, password := ExtractUserinfo(address)
+		if addressResult != addressExpected {
+			t.Fatalf("unexpected address for %q; got %q; want %q", address, addressResult, addressExpected)
+		}
+		if username != usernameExpected {
+			t.Fatalf("unexpected username for %q; got %q; want %q", address, username, usernameExpected)
+		}
+		if password != passwordExpected {
+			t.Fatalf("unexpected password for %q; got %q; want %q", address, password, passwordExpected)
+		}
+	}
+
+	// Missing userinfo
+	f("", "", "", "")
+	f("foo", "foo", "", "")
+	f("foo:1234", "foo:1234", "", "")
+	f("http://foo:1234/metrics?x=y", "http://foo:1234/metrics?x=y", "", "")
+	f("[::1]:1234", "[::1]:1234", "", "")
+
+	// userinfo without password
+	f("user@foo", "foo", "user", "")
+	f("user@foo:1234", "foo:1234", "user", "")
+	f("http://user@foo/metrics", "http://foo/metrics", "user", "")
+
+	// userinfo with password
+	f("user:pass@foo", "foo", "user", "pass")
+	f("user:pass@foo:1234", "foo:1234", "user", "pass")
+	f("user:pass@foo:1234/metrics?x=y", "foo:1234/metrics?x=y", "user", "pass")
+	f("http://user:pass@foo/metrics", "http://foo/metrics", "user", "pass")
+	f("https://user:pass@foo:1234/metrics", "https://foo:1234/metrics", "user", "pass")
+
+	// empty username and/or password
+	f(":pass@foo", "foo", "", "pass")
+	f("user:@foo", "foo", "user", "")
+	f("@foo", "@foo", "", "")
+
+	// escaped userinfo
+	f("user:p%40ss@foo", "foo", "user", "p@ss")
+	f("user%3Aname:pass@foo", "foo", "user:name", "pass")
+
+	// `@` in the path or in query args mustn't be treated as the userinfo separator
+	f("foo/metrics@bar", "foo/metrics@bar", "", "")
+	f("foo/metrics?x=a@b", "foo/metrics?x=a@b", "", "")
+}

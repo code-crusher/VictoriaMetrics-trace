@@ -176,6 +176,23 @@ func TestLabelsRemoveLabelsWithDoubleUnderscorePrefix(t *testing.T) {
 	f(`{__meta_foo="bdffr",foo="bar",__meta_xxx="basd"}`, `{foo="bar"}`)
 }
 
+func TestLabelsRemove(t *testing.T) {
+	f := func(metric, name, resultExpected string) {
+		t.Helper()
+		labels := MustNewLabelsFromString(metric)
+		labels.Remove(name)
+		result := labels.String()
+		if result != resultExpected {
+			t.Fatalf("unexpected result of Remove(%q);\ngot\n%s\nwant\n%s", name, result, resultExpected)
+		}
+	}
+	f(`{}`, `foo`, `{}`)
+	f(`{foo="bar"}`, `foo`, `{}`)
+	f(`{foo="bar"}`, `bar`, `{foo="bar"}`)
+	f(`{__meta_foo="bar",a="b",__name__="foo",__vm_filepath="aa"}`, `__meta_foo`, `{a="b",__name__="foo",__vm_filepath="aa"}`)
+	f(`{a="b",c="d",a="e"}`, `a`, `{c="d"}`)
+}
+
 func TestLabels_Set(t *testing.T) {
 	f := func(metric, name, value, resultExpected string) {
 		t.Helper()

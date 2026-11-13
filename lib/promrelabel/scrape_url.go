@@ -61,6 +61,56 @@ func GetScrapeURL(labels *promutil.Labels, extraParams map[string][]string) (str
 	return scrapeURL, addressMustWithPort
 }
 
+// ExtractUserinfo extracts optional basic auth credentials from the userinfo part of the given address
+// in the form `[scheme://][username[:password]@]host[:port][/path][?query]`.
+//
+// It returns the address without the userinfo, plus the extracted username and password.
+// The returned address is equal to the given address if the userinfo is missing.
+//
+// Credentials from the address must be extracted into the per-target basic auth config, since otherwise
+// they are exposed in the `instance` label, at the `/targets` page and in scrape error messages.
+// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/9733
+func ExtractUserinfo(address string) (string, string, string) {
+	// Skip the optional scheme prefix, so the authority part could be located.
+	prefix := ""
+	rest := address
+	if n := strings.Index(rest, "://"); n >= 0 {
+		prefix = rest[:n+3]
+		rest = rest[n+3:]
+	}
+	// Search for the userinfo only in the authority part of the address, since `@` may occur in the path or in query args.
+	authority := rest
+	if n := strings.IndexAny(authority, "/?#"); n >= 0 {
+		authority = authority[:n]
+	}
+	n := strings.LastIndexByte(authority, '@')
+	if n < 0 {
+		return address, "", ""
+	}
+	userinfo := authority[:n]
+	username := userinfo
+	password := ""
+	if i := strings.IndexByte(userinfo, ':'); i >= 0 {
+		username = userinfo[:i]
+		password = userinfo[i+1:]
+	}
+	if username == "" && password == "" {
+		return address, "", ""
+	}
+	return prefix + rest[n+1:], unescapeUserinfo(username), unescapeUserinfo(password)
+}
+
+func unescapeUserinfo(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	d, err := url.PathUnescape(s)
+	if err != nil {
+		return s
+	}
+	return d
+}
+
 func getParamsFromLabels(labels *promutil.Labels, extraParams map[string][]string) map[string][]string {
 	// See https://www.robustperception.io/life-of-a-label
 	var m map[string][]string

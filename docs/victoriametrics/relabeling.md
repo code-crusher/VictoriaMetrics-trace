@@ -501,6 +501,20 @@ URLs for scrape targets are composed of the following parts:
     the `instance` label. The `__address__` label can contain the full scrape
     URL (e.g. `http://host:port/metrics/path?query_args`). In this case the
     `__scheme__` and `__metrics_path__` labels are ignored.
+  - Target addresses provided by service discovery, including
+    [file_sd_configs](https://docs.victoriametrics.com/victoriametrics/sd_configs/#file_sd_configs)
+    and
+    [static_configs](https://docs.victoriametrics.com/victoriametrics/sd_configs/#static_configs),
+    may contain per-target basic auth credentials in the `username:password@` part, e.g.
+    `user:pass@host:port` or `https://user:pass@host:port/metrics`. These credentials are sent to the
+    target in the `Authorization` header and take precedence over the
+    `basic_auth` section at
+    [scrape_config](https://docs.victoriametrics.com/victoriametrics/sd_configs/#scrape_configs)
+    level. They are stripped from the `__address__` label before relabeling, so they aren't
+    exposed in the `instance` label, at the `/targets` page and in scrape error
+    messages. This is useful for setting per-target credentials without creating a separate
+    `scrape_config` per credential. See
+    [issue #9733](https://github.com/VictoriaMetrics/VictoriaMetrics/issues/9733).
 - URL path (e.g. `/metrics`) is available during target relabeling in a special
   label - `__metrics_path__`. By default, it's set to `/metrics` and can be
   overridden either by specifying the `metrics_path` option at
@@ -521,6 +535,10 @@ The resulting scrape URL looks like the following:
 ```go
 <__scheme__> + "://" + <__address__> + <__metrics_path__> + <"?" + query_args_from_param_labels>
 ```
+
+The `username:password@` part of `__address__` isn't included in the resulting
+scrape URL, since it's converted into per-target basic auth credentials as
+described above.
 
 Given the scrape URL construction rules above, the following config discovers
 pod targets in

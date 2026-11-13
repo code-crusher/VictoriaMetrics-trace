@@ -424,6 +424,27 @@ func (ac *Config) GetHTTPHeadersNoAuth() http.Header {
 	return dst
 }
 
+// WithBasicAuth returns a copy of ac, which uses the given basic auth credentials instead of the credentials from ac.
+//
+// It is used for setting per-target basic auth credentials extracted from `user:pass@` part of scrape target addresses.
+// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/9733
+func (ac *Config) WithBasicAuth(username, password string) *Config {
+	authHeaderDigest := fmt.Sprintf("basic(username=%q, password=%q)", username, password)
+	getAuthHeader := func() (string, error) {
+		// See https://en.wikipedia.org/wiki/Basic_access_authentication
+		token := username + ":" + password
+		token64 := base64.StdEncoding.EncodeToString([]byte(token))
+		return "Basic " + token64, nil
+	}
+	if ac == nil {
+		ac = &Config{}
+	}
+	acCopy := *ac
+	acCopy.getAuthHeaderCached = newGetAuthHeaderCached(getAuthHeader)
+	acCopy.authHeaderDigest = authHeaderDigest
+	return &acCopy
+}
+
 // String returns human-readable representation for ac.
 //
 // It is also used for comparing Config objects for equality. If two Config

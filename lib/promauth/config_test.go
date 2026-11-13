@@ -568,6 +568,65 @@ func TestParseHeadersSuccess(t *testing.T) {
 	f([]string{"Foo: bar", "A-B-C: d-e-f"})
 }
 
+func TestConfigWithBasicAuth(t *testing.T) {
+	f := func(ac *Config, username, password, ahExpected string) {
+		t.Helper()
+
+		acResult := ac.WithBasicAuth(username, password)
+		ah, err := acResult.GetAuthHeader()
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if ah != ahExpected {
+			t.Fatalf("unexpected Authorization header; got %q; want %q", ah, ahExpected)
+		}
+
+		// Make sure SetHeaders() properly sets the Authorization header.
+		req, err := http.NewRequest(http.MethodGet, "http://foo", nil)
+		if err != nil {
+			t.Fatalf("unexpected error in http.NewRequest: %s", err)
+		}
+		if err := acResult.SetHeaders(req, true); err != nil {
+			t.Fatalf("unexpected error in SetHeaders(): %s", err)
+		}
+		if ah = req.Header.Get("Authorization"); ah != ahExpected {
+			t.Fatalf("unexpected Authorization header in the request; got %q; want %q", ah, ahExpected)
+		}
+
+		// The original config mustn't be modified.
+		if ac != nil {
+			ahOrig, err := ac.GetAuthHeader()
+			if err != nil {
+				t.Fatalf("unexpected error: %s", err)
+			}
+			if ahOrig == ahExpected && (username != "" || password != "") {
+				t.Fatalf("the original config mustn't be modified")
+			}
+		}
+	}
+
+	// nil config
+	f(nil, "user", "pass", "Basic dXNlcjpwYXNz")
+
+	// empty config
+	f(&Config{}, "user", "pass", "Basic dXNlcjpwYXNz")
+
+	// config with basic auth
+	var hcc HTTPClientConfig
+	if err := yaml.UnmarshalStrict([]byte(`
+basic_auth:
+  username: foo
+  password: bar
+`), &hcc); err != nil {
+		t.Fatalf("cannot unmarshal config: %s", err)
+	}
+	ac, err := hcc.NewConfig("")
+	if err != nil {
+		t.Fatalf("cannot initialize config: %s", err)
+	}
+	f(ac, "user", "pass", "Basic dXNlcjpwYXNz")
+}
+
 func TestParseHeadersFailure(t *testing.T) {
 	f := func(headers []string) {
 		t.Helper()

@@ -1617,6 +1617,152 @@ func TestScrapeConfigClone(t *testing.T) {
 	})
 }
 
+func TestGetStaticScrapeWorkWithCredentialsInAddress(t *testing.T) {
+	f := func(data string, expectedSws []*ScrapeWork) {
+		t.Helper()
+		sws, err := getStaticScrapeWork([]byte(data), "non-existing-file")
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		checkEqualScrapeWorks(t, sws, expectedSws)
+	}
+
+	f(`
+scrape_configs:
+- job_name: foo
+  static_configs:
+  - targets: ["user:pass@host1:1234", "http://user2:pass2@host2/metrics", "host3:1234"]
+`, []*ScrapeWork{
+		{
+			ScrapeURL:      "http://host1:1234/metrics",
+			ScrapeInterval: defaultScrapeInterval,
+			ScrapeTimeout:  defaultScrapeTimeout,
+			MaxScrapeSize:  maxScrapeSize.N,
+			Labels: promutil.NewLabelsFromMap(map[string]string{
+				"instance": "host1:1234",
+				"job":      "foo",
+			}),
+			jobNameOriginal: "foo",
+		},
+		{
+			ScrapeURL:      "http://host2/metrics",
+			ScrapeInterval: defaultScrapeInterval,
+			ScrapeTimeout:  defaultScrapeTimeout,
+			MaxScrapeSize:  maxScrapeSize.N,
+			Labels: promutil.NewLabelsFromMap(map[string]string{
+				"instance": "host2:80",
+				"job":      "foo",
+			}),
+			jobNameOriginal: "foo",
+		},
+		{
+			ScrapeURL:      "http://host3:1234/metrics",
+			ScrapeInterval: defaultScrapeInterval,
+			ScrapeTimeout:  defaultScrapeTimeout,
+			MaxScrapeSize:  maxScrapeSize.N,
+			Labels: promutil.NewLabelsFromMap(map[string]string{
+				"instance": "host3:1234",
+				"job":      "foo",
+			}),
+			jobNameOriginal: "foo",
+		},
+	})
+}
+
+func TestCredentialsInAddressAreAppliedToAuthConfig(t *testing.T) {
+	data := `
+scrape_configs:
+- job_name: foo
+  basic_auth:
+    username: config-user
+    password: config-pass
+  static_configs:
+  - targets: ["user:pass@host1:1234"]
+  - targets: ["host2:1234"]
+`
+	var cfg Config
+	if err := cfg.parseData([]byte(data), "sss"); err != nil {
+		t.Fatalf("cannot parse data: %s", err)
+	}
+	sws := cfg.getStaticScrapeWork()
+	if len(sws) != 2 {
+		t.Fatalf("unexpected number of ScrapeWork items; got %d; want 2", len(sws))
+	}
+
+	// Per-target credentials from the `user:pass@` part of `__address__` must take precedence
+	// over the credentials from the `basic_auth` section at `scrape_config` level.
+	ah, err := sws[0].AuthConfig.GetAuthHeader()
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	if ah != "Basic dXNlcjpwYXNz" {
+		t.Fatalf("unexpected Authorization header for the target with credentials in the address; got %q; want %q", ah, "Basic dXNlcjpwYXNz")
+	}
+	if sws[0].ScrapeURL != "http://host1:1234/metrics" {
+		t.Fatalf("unexpected scrapeURL; got %q; want %q", sws[0].ScrapeURL, "http://host1:1234/metrics")
+	}
+	if instance := sws[0].Labels.Get("instance"); instance != "host1:1234" {
+		t.Fatalf("unexpected instance label; got %q; want %q", instance, "host1:1234")
+	}
+
+	// Targets without credentials in the address must use the `basic_auth` config from `scrape_config`.
+	ah, err = sws[1].AuthConfig.GetAuthHeader()
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	if ah != "Basic Y29uZmlnLXVzZXI6Y29uZmlnLXBhc3M=" {
+		t.Fatalf("unexpected Authorization header for the target without credentials in the address; got %q; want %q", ah, "Basic Y29uZmlnLXVzZXI6Y29uZmlnLXBhc3M=")
+	}
+
+	// The credentials from the address mustn't be exposed in the original labels shown at the `/targets` page.
+	originalLabels := sws[0].OriginalLabels.labelsString()
+	if strings.Contains(originalLabels, "pass") {
+		t.Fatalf("credentials mustn't be exposed in original labels; got %s", originalLabels)
+	}
+}
+
+func TestCredentialsAddedByRelabelingAreAppliedToAuthConfig(t *testing.T) {
+	data := `
+scrape_configs:
+- job_name: foo
+  static_configs:
+  - targets: ["host1:1234"]
+  relabel_configs:
+  - source_labels: [__address__]
+    regex: "(.+)"
+    replacement: "relabeled-user:relabeled-pass@$1"
+    target_label: __address__
+`
+	var cfg Config
+	if err := cfg.parseData([]byte(data), "sss"); err != nil {
+		t.Fatalf("cannot parse data: %s", err)
+	}
+	sws := cfg.getStaticScrapeWork()
+	if len(sws) != 1 {
+		t.Fatalf("unexpected number of ScrapeWork items; got %d; want 1", len(sws))
+	}
+	sw := sws[0]
+
+	// Credentials added to `__address__` during relabeling must be moved to the per-target auth config
+	// instead of being exposed in the scrape URL, in the `instance` label and at the `/targets` page.
+	ah, err := sw.AuthConfig.GetAuthHeader()
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	if ah != "Basic cmVsYWJlbGVkLXVzZXI6cmVsYWJlbGVkLXBhc3M=" {
+		t.Fatalf("unexpected Authorization header; got %q; want %q", ah, "Basic cmVsYWJlbGVkLXVzZXI6cmVsYWJlbGVkLXBhc3M=")
+	}
+	if sw.ScrapeURL != "http://host1:1234/metrics" {
+		t.Fatalf("unexpected scrapeURL; got %q; want %q", sw.ScrapeURL, "http://host1:1234/metrics")
+	}
+	if instance := sw.Labels.Get("instance"); instance != "host1:1234" {
+		t.Fatalf("unexpected instance label; got %q; want %q", instance, "host1:1234")
+	}
+	if s := sw.Labels.String(); strings.Contains(s, "relabeled-pass") {
+		t.Fatalf("credentials mustn't be exposed in target labels; got %s", s)
+	}
+}
+
 func checkEqualScrapeWorks(t *testing.T, got, want []*ScrapeWork) {
 	t.Helper()
 
