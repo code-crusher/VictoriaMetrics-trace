@@ -7821,6 +7821,25 @@ func TestExecSuccess(t *testing.T) {
 		resultExpected := []netstorage.Result{}
 		f(q, resultExpected)
 	})
+	t.Run(`outliers_mad(3)`, func(t *testing.T) {
+		t.Parallel()
+		// The recommended starting tolerance. It must keep detecting
+		// the series with the 1.5x deviation from the median, while
+		// skipping the series with the 0.9x deviation.
+		q := `outliers_mad(3, (
+			alias(time(), "metric1"),
+			alias(time()*1.5, "metric2"),
+			label_set(time()*0.9, "baz", "sss"),
+		))`
+		r := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{1500, 1800, 2100, 2400, 2700, 3000},
+			Timestamps: timestampsExpected,
+		}
+		r.MetricName.MetricGroup = []byte("metric2")
+		resultExpected := []netstorage.Result{r}
+		f(q, resultExpected)
+	})
 	t.Run(`outliersk(0)`, func(t *testing.T) {
 		t.Parallel()
 		q := `outliersk(0, (

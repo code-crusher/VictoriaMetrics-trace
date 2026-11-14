@@ -2197,6 +2197,20 @@ comparing to other time series at the given point, where:
 The `outliers_iqr()` is useful for detecting anomalous series in the group of series. For example, `outliers_iqr(temperature) by (country)` returns
 per-country series with anomalous outlier values comparing to the rest of per-country series.
 
+**Choosing between IQR and MAD:**
+
+* Both approaches are robust to extreme values, since they build the bounds from the median and from quantiles instead of the average
+  and the standard deviation. Start with IQR-based functions (`outliers_iqr`, `outlier_iqr_over_time`) when you need the standard
+  [Tukey bounds](https://en.wikipedia.org/wiki/Interquartile_range) `[q25-1.5*iqr .. q75+1.5*iqr]` without any tuning -
+  the fixed `1.5` multiplier gives good results out of the box for most of the observability metrics.
+* Prefer MAD-based functions (`outliers_mad`, `range_trim_outliers`) when you need to control the detection sensitivity via
+  the `tolerance` multiplier - e.g. tighten the bounds when the detection triggers too often or loosen them when it misses real anomalies.
+* Both approaches are univariate: they compare values against bounds computed from a single window or from a single group of series.
+  They cannot model multimodal "normal" behavior, so they may miss anomalies when the metric jumps between two distinct value levels
+  (e.g. day/night traffic or a batch job running or not) and the new value falls between those levels. Density-based clustering
+  (e.g. DBSCAN) addresses such cases, but it isn't implemented in MetricsQL - use [vmanomaly](https://docs.victoriametrics.com/anomaly-detection/)
+  with its seasonality-aware models for such metrics.
+
 See also [outliers_mad](#outliers_mad), [outliersk](#outliersk) and [outlier_iqr_over_time](#outlier_iqr_over_time).
 
 #### outliers_mad
@@ -2204,6 +2218,13 @@ See also [outliers_mad](#outliers_mad), [outliersk](#outliersk) and [outlier_iqr
 `outliers_mad(tolerance, q)` is [aggregate function](#aggregate-functions), which returns time series from `q` with at least
 a single point outside [Median absolute deviation](https://en.wikipedia.org/wiki/Median_absolute_deviation) (aka MAD) multiplied by `tolerance`.
 E.g. it returns time series with at least a single point below `median(q) - mad(q)` or a single point above `median(q) + mad(q)`.
+
+The `tolerance` argument controls the sensitivity of the detection: bigger values make the detection less sensitive,
+so fewer series are returned. Start with the `tolerance` of `3` and adjust it based on the number of false positives
+and false negatives in the results. Note that for normally distributed data `1.4826*MAD` approximates the standard deviation,
+so the `tolerance` of `3` corresponds to roughly `2-sigma` bounds.
+
+See the [comparison of IQR-based and MAD-based outlier detection](#outliers_iqr) for choosing between `outliers_mad()` and `outliers_iqr()`.
 
 See also [outliers_iqr](#outliers_iqr), [outliersk](#outliersk) and [mad](#mad).
 
