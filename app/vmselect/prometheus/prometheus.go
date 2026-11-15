@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"math"
@@ -341,7 +342,7 @@ func ExportHandler(startTime time.Time, w http.ResponseWriter, r *http.Request) 
 	format := r.FormValue("format")
 	maxRowsPerLine := int(fastfloat.ParseInt64BestEffort(r.FormValue("max_rows_per_line")))
 	reduceMemUsage := httputil.GetBool(r, "reduce_mem_usage")
-	if err := exportHandler(ctx, nil, w, cp, format, maxRowsPerLine, reduceMemUsage); err != nil {
+	if err := exportHandler(ctx, nil, w, cp, format, maxRowsPerLine, reduceMemUsage, 0); err != nil {
 		return fmt.Errorf("error when exporting data on the time range (start=%d, end=%d): %w", cp.start, cp.end, err)
 	}
 	return nil
@@ -349,7 +350,12 @@ func ExportHandler(startTime time.Time, w http.ResponseWriter, r *http.Request) 
 
 var exportDuration = metrics.NewSummary(`vm_request_duration_seconds{path="/api/v1/export"}`)
 
-func exportHandler(ctx context.Context, qt *querytracer.Tracer, w http.ResponseWriter, cp *commonParams, format string, maxRowsPerLine int, reduceMemUsage bool) error {
+// errLimitReached is returned by the export callback when the number of exported time series reaches the limit
+// configured via the `limit` query arg at /api/v1/query. It is used to stop the export early without
+// reporting an error to the caller.
+var errLimitReached = errors.New("the number of exported time series reached the limit")
+
+func exportHandler(ctx context.Context, qt *querytracer.Tracer, w http.ResponseWriter, cp *commonParams, format string, maxRowsPerLine int, reduceMemUsage bool, limit int) error {
 	bw := bufferedwriter.Get(w)
 	defer bufferedwriter.Put(bw)
 	sw := newScalableWriter(bw)
@@ -428,6 +434,7 @@ func exportHandler(ctx context.Context, qt *querytracer.Tracer, w http.ResponseW
 	sq := storage.NewSearchQuery(cp.start, cp.end, cp.filterss, *maxExportSeries)
 	w.Header().Set("Content-Type", contentType)
 
+	var seriesCount atomic.Int64
 	doneCh := make(chan error, 1)
 	if !reduceMemUsage {
 		rss, err := netstorage.ProcessSearchQuery(ctx, qt, sq)
@@ -440,6 +447,9 @@ func exportHandler(ctx context.Context, qt *querytracer.Tracer, w http.ResponseW
 				if err := bw.Error(); err != nil {
 					return err
 				}
+				if limit > 0 && seriesCount.Add(1) > int64(limit) {
+					return errLimitReached
+				}
 				xb := exportBlockPool.Get().(*exportBlock)
 				xb.mn = &rs.MetricName
 				xb.timestamps = rs.Timestamps
@@ -451,6 +461,9 @@ func exportHandler(ctx context.Context, qt *querytracer.Tracer, w http.ResponseW
 				exportBlockPool.Put(xb)
 				return nil
 			})
+			if errors.Is(err, errLimitReached) {
+				err = nil
+			}
 			qtChild.Done()
 			doneCh <- err
 		}()
@@ -460,6 +473,9 @@ func exportHandler(ctx context.Context, qt *querytracer.Tracer, w http.ResponseW
 			err := netstorage.ExportBlocks(ctx, qtChild, sq, func(mn *storage.MetricName, b *storage.Block, tr storage.TimeRange, workerID uint) error {
 				if err := bw.Error(); err != nil {
 					return err
+				}
+				if limit > 0 && seriesCount.Add(1) > int64(limit) {
+					return errLimitReached
 				}
 				if err := b.UnmarshalData(); err != nil {
 					return fmt.Errorf("cannot unmarshal block during export: %w", err)
@@ -476,6 +492,9 @@ func exportHandler(ctx context.Context, qt *querytracer.Tracer, w http.ResponseW
 				exportBlockPool.Put(xb)
 				return nil
 			})
+			if errors.Is(err, errLimitReached) {
+				err = nil
+			}
 			qtChild.Done()
 			doneCh <- err
 		}()
@@ -813,6 +832,13 @@ func QueryHandler(qt *querytracer.Tracer, startTime time.Time, w http.ResponseWr
 	if step <= 0 {
 		step = defaultStep
 	}
+	limit, err := httputil.GetInt(r, "limit")
+	if err != nil {
+		return httpserver.InvalidParamError(err)
+	}
+	if limit < 0 {
+		limit = 0
+	}
 
 	maxLen := searchutil.GetMaxQueryLen()
 	if len(query) > maxLen {
@@ -852,7 +878,7 @@ func QueryHandler(qt *querytracer.Tracer, startTime time.Time, w http.ResponseWr
 		ctx, cancel := searchutil.GetContextForExport(r, startTime)
 		defer cancel()
 
-		if err := exportHandler(ctx, qt, w, cp, "promapi", 0, false); err != nil {
+		if err := exportHandler(ctx, qt, w, cp, "promapi", 0, false, limit); err != nil {
 			return fmt.Errorf("error when exporting data for query=%q on the time range (start=%d, end=%d): %w", childQuery, start, end, err)
 		}
 		return nil
@@ -876,7 +902,7 @@ func QueryHandler(qt *querytracer.Tracer, startTime time.Time, w http.ResponseWr
 		start -= offset
 		end := start
 		start = end - window
-		if err := queryRangeHandler(qt, startTime, w, childQuery, start, end, step, lookbackDelta, r, ct, etfs); err != nil {
+		if err := queryRangeHandler(qt, startTime, w, childQuery, start, end, step, lookbackDelta, r, ct, etfs, limit); err != nil {
 			return fmt.Errorf("error when executing query=%q on the time range (start=%d, end=%d, step=%d): %w", childQuery, start, end, step, err)
 		}
 		return nil
@@ -943,7 +969,7 @@ func QueryHandler(qt *querytracer.Tracer, startTime time.Time, w http.ResponseWr
 		qt.Donef("query=%s, time=%d: series=%d", query, start, len(result))
 	}
 
-	WriteQueryResponse(bw, result, qt, qtDone, qs)
+	WriteQueryResponse(bw, result, qt, qtDone, qs, limit)
 	if err := bw.Flush(); err != nil {
 		return fmt.Errorf("cannot flush query response to remote client: %w", err)
 	}
@@ -980,6 +1006,13 @@ func QueryRangeHandler(qt *querytracer.Tracer, startTime time.Time, w http.Respo
 	if err != nil {
 		return httpserver.InvalidParamError(err)
 	}
+	limit, err := httputil.GetInt(r, "limit")
+	if err != nil {
+		return httpserver.InvalidParamError(err)
+	}
+	if limit < 0 {
+		limit = 0
+	}
 	etfs, err := searchutil.GetExtraTagFilters(r)
 	if err != nil {
 		return httpserver.InvalidParamError(err)
@@ -988,14 +1021,14 @@ func QueryRangeHandler(qt *querytracer.Tracer, startTime time.Time, w http.Respo
 	if err != nil {
 		return httpserver.InvalidParamError(err)
 	}
-	if err := queryRangeHandler(qt, startTime, w, query, start, end, step, lookbackDelta, r, ct, etfs); err != nil {
+	if err := queryRangeHandler(qt, startTime, w, query, start, end, step, lookbackDelta, r, ct, etfs, limit); err != nil {
 		return fmt.Errorf("error when executing query=%q on the time range (start=%d, end=%d, step=%d): %w", query, start, end, step, err)
 	}
 	return nil
 }
 
 func queryRangeHandler(qt *querytracer.Tracer, startTime time.Time, w http.ResponseWriter, query string,
-	start, end, step, lookbackDelta int64, r *http.Request, ct int64, etfs [][]storage.TagFilter) error {
+	start, end, step, lookbackDelta int64, r *http.Request, ct int64, etfs [][]storage.TagFilter, limit int) error {
 	mayCache := !httputil.GetBool(r, "nocache")
 	ctx, cancel := searchutil.GetContextForQuery(r, startTime)
 	defer cancel()
@@ -1056,7 +1089,7 @@ func queryRangeHandler(qt *querytracer.Tracer, startTime time.Time, w http.Respo
 	qtDone := func() {
 		qt.Donef("start=%d, end=%d, step=%d, query=%q: series=%d", start, end, step, query, len(result))
 	}
-	WriteQueryRangeResponse(bw, result, qt, qtDone, qs)
+	WriteQueryRangeResponse(bw, result, qt, qtDone, qs, limit)
 	if err := bw.Flush(); err != nil {
 		return fmt.Errorf("cannot send query range response to remote client: %w", err)
 	}

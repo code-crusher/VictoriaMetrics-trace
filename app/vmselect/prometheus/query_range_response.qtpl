@@ -7,10 +7,13 @@
 {% stripspace %}
 QueryRangeResponse generates response for /api/v1/query_range.
 See https://prometheus.io/docs/prometheus/latest/querying/api/#range-queries
-{% func QueryRangeResponse(rs []netstorage.Result, qt *querytracer.Tracer, qtDone func(), qs *promql.QueryStats) %}
+{% func QueryRangeResponse(rs []netstorage.Result, qt *querytracer.Tracer, qtDone func(), qs *promql.QueryStats, limit int) %}
 {
 	{% code
 		seriesCount := len(rs)
+		if limit > 0 && len(rs) > limit {
+			rs = rs[:limit]
+		}
 		pointsCount := 0
 	%}
 	"status":"success",

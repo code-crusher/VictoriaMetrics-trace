@@ -490,6 +490,9 @@ handler. It allows `vmselect` to execute left and right sides of binary operator
 optimized aggregate rollup result expression, so the second side may reuse the rollup result cache populated by the first side.
 The optimization is disabled by default and applies only when rollup result cache can be used for the request.
 
+VictoriaMetrics accepts `limit` query arg for [/api/v1/query](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#instant-query)
+and [/api/v1/query_range](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#range-query) handlers for limiting the number of returned time series, similarly to Prometheus. For example, `/api/v1/query?query=up&limit=5` returns up to 5 time series, while silently ignoring the rest. The limit is applied only when it is set to a positive value. See [this issue](https://github.com/VictoriaMetrics/VictoriaMetrics/issues/9573) for details.
+
 VictoriaMetrics accepts `limit` query arg for [/api/v1/labels](https://docs.victoriametrics.com/victoriametrics/url-examples/#apiv1labels)
 and [`/api/v1/label/<labelName>/values`](https://docs.victoriametrics.com/victoriametrics/url-examples/#apiv1labelvalues) handlers for limiting the number of returned entries.
 For example, the query to `/api/v1/labels?limit=5` returns a sample of up to 5 unique labels, while ignoring the rest of labels.
