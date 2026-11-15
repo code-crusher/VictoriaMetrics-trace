@@ -111,6 +111,17 @@ groups:
              2. Remote write connection is slow.  Increase `-remoteWrite.concurrency`,  so vmalert could establish more concurrent connections.
              3. The queue size is too small. Increase `-remoteWrite.maxQueueSize` to extend the buffer size. Note that a larger queue will result in higher memory consumption when the queue is full."
 
+      - alert: RulesSkipped
+        expr: sum by (instance, type) (vmalert_skipped_groups) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "vmalert instance {{ $labels.instance }} is skipping rule groups of type {{ $labels.type }}"
+          description: "vmalert instance {{ $labels.instance }} skipped rule groups of type \"{{ $labels.type }}\" because the type is not listed in the -rule.enabledRuleTypes flag.
+            The affected groups are not being evaluated. Check that the -rule.enabledRuleTypes flag matches the datasource configured for this vmalert instance,
+            or move the skipped groups to an instance that evaluates them."
+
       - alert: AlertmanagerErrors
         expr: increase(vmalert_alerts_send_errors_total[5m]) > 0
         for: 15m

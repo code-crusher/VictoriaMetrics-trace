@@ -74,6 +74,11 @@ func replay(groupsCfg []config.Group, qb datasource.QuerierBuilder, rw remotewri
 		tFrom, tTo, *replayMaxDatapoints)
 
 	for _, cfg := range groupsCfg {
+		if !config.RuleTypeEnabled(cfg.Type) {
+			// Skip the group, as replaying rules of types that are not enabled doesn't make sense against the configured datasource.
+			logger.Warnf("skipping group %q with type %q from file %q; the type is not listed in -rule.enabledRuleTypes", cfg.Name, cfg.Type.String(), cfg.File)
+			continue
+		}
 		ng := rule.NewGroup(cfg, qb, *evaluationInterval, labels)
 		totalRows += ng.Replay(tFrom, tTo, rw, *replayMaxDatapoints, *replayRuleRetryAttempts, *replayRulesDelay, *disableProgressBar, *ruleEvaluationConcurrency, *continueWithExecutionErr)
 	}

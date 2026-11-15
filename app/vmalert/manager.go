@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
+
+	"github.com/VictoriaMetrics/metrics"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/config"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/datasource"
@@ -13,6 +16,43 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/rule"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 )
+
+// skippedGroups counts skipped (not evaluated) rule groups per rule type.
+// The counts are exported via vmalert_skipped_groups{type="<type>"} gauges, which are registered lazily
+// to avoid exporting metrics for types that were never skipped.
+var (
+	skippedGroupsCount  sync.Map // string -> int
+	skippedGroupsByType sync.Map // string -> struct{}, guards lazy gauge registration
+)
+
+// setSkippedGroupsByType publishes the number of skipped groups per rule type.
+// Types that are no longer skipped are set to zero, so the exported metrics always reflect the current config.
+func setSkippedGroupsByType(skippedByType map[string]int) {
+	// zero-out types that are no longer skipped
+	skippedGroupsCount.Range(func(key, _ any) bool {
+		if _, ok := skippedByType[key.(string)]; !ok {
+			skippedGroupsCount.Store(key, 0)
+		}
+		return true
+	})
+	for t, count := range skippedByType {
+		skippedGroupsCount.Store(t, count)
+		if _, ok := skippedGroupsByType.Load(t); !ok {
+			mt := t
+			metrics.NewGauge(`vmalert_skipped_groups{type="`+promLabelValueEscape(mt)+`"}`, func() float64 {
+				v, ok := skippedGroupsCount.Load(mt)
+				if !ok {
+					return 0
+				}
+				return float64(v.(int))
+			})
+			skippedGroupsByType.Store(t, struct{}{})
+		}
+	}
+}
+
+// promLabelValueEscape escapes s so it can be used as a Prometheus label value.
+var promLabelValueEscape = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`).Replace
 
 // manager controls group states
 type manager struct {
@@ -115,7 +155,17 @@ func (m *manager) startGroup(ctx context.Context, g *rule.Group, restore bool) {
 func (m *manager) update(ctx context.Context, groupsCfg []config.Group, restore bool) error {
 	var rrPresent, arPresent bool
 	groupsRegistry := make(map[uint64]*rule.Group)
+	skippedByType := make(map[string]int)
 	for _, cfg := range groupsCfg {
+		if !config.RuleTypeEnabled(cfg.Type) {
+			// The group type is not enabled for evaluation in this instance, so skip it.
+			// This allows sharing rule files between multiple vmalert instances with different datasources.
+			// Skipping is reported via logs and the vmalert_skipped_groups metric,
+			// so that admins can always notice skipped groups.
+			logger.Warnf("skipping group %q with type %q from file %q; the type is not listed in -rule.enabledRuleTypes", cfg.Name, cfg.Type.String(), cfg.File)
+			skippedByType[cfg.Type.String()]++
+			continue
+		}
 		for _, r := range cfg.Rules {
 			if rrPresent && arPresent {
 				break
@@ -130,6 +180,7 @@ func (m *manager) update(ctx context.Context, groupsCfg []config.Group, restore 
 		ng := rule.NewGroup(cfg, m.querierBuilder, *evaluationInterval, m.labels)
 		groupsRegistry[ng.GetID()] = ng
 	}
+	setSkippedGroupsByType(skippedByType)
 
 	if rrPresent && m.rw == nil {
 		return fmt.Errorf("config contains recording rules but `-remoteWrite.url` isn't set")

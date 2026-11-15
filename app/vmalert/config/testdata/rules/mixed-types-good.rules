@@ -1,0 +1,12 @@
+groups:
+  - name: PrometheusGroup
+    rules:
+      - alert: HighErrorRate
+        expr: sum(rate(http_requests_total{code=~"5.."}[5m])) > 1
+  - name: VLogsGroup
+    type: vlogs
+    rules:
+      - alert: HasErrorLog
+        expr: 'env: "prod" AND level: "error" | stats count(*) as errors | filter errors:>0'
+        annotations:
+          summary: "too many errors"

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"flag"
 	"math/rand"
 	"net/url"
 	"os"
@@ -10,12 +12,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/VictoriaMetrics/metrics"
+
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/config"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/datasource"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/notifier"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/remotewrite"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/rule"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/templates"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/flagutil"
 )
 
 func TestMain(m *testing.M) {
@@ -334,4 +339,68 @@ func loadCfg(t *testing.T, path []string, validateAnnotations, validateExpressio
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func setEnabledRuleTypes(t *testing.T, value []string) func() {
+	t.Helper()
+	f := flag.Lookup("rule.enabledRuleTypes")
+	if f == nil {
+		t.Fatalf("flag rule.enabledRuleTypes isn't registered")
+	}
+	ary, ok := f.Value.(*flagutil.ArrayString)
+	if !ok {
+		t.Fatalf("unexpected type %T for flag rule.enabledRuleTypes", f.Value)
+	}
+	old := *ary
+	*ary = flagutil.ArrayString(value)
+	return func() {
+		*ary = old
+	}
+}
+
+func TestManagerUpdateSkippedRuleTypes(t *testing.T) {
+	// restrict evaluation to prometheus rules only
+	defer setEnabledRuleTypes(t, []string{"prometheus"})()
+
+	const defaultEvalInterval = time.Second * 30
+	currentEvalInterval := *evaluationInterval
+	*evaluationInterval = defaultEvalInterval
+	defer func() { *evaluationInterval = currentEvalInterval }()
+
+	_, cleanup := notifier.InitFakeNotifier()
+	defer cleanup()
+
+	m := &manager{
+		groups:         make(map[uint64]*rule.Group),
+		querierBuilder: &datasource.FakeQuerier{},
+	}
+	cfg := loadCfg(t, []string{"config/testdata/rules/mixed-types-good.rules"}, true, true)
+	if err := m.update(context.Background(), cfg, false); err != nil {
+		t.Fatalf("failed to update: %s", err)
+	}
+	// only the prometheus group must be present; the vlogs group must be skipped
+	if len(m.groups) != 1 {
+		t.Fatalf("expected 1 group to be loaded; got %d", len(m.groups))
+	}
+	for _, g := range m.groups {
+		if g.Type.String() != "prometheus" {
+			t.Fatalf("expected only prometheus groups to be loaded; got type %q (group %q)", g.Type.String(), g.Name)
+		}
+	}
+
+	var bb bytes.Buffer
+	metrics.WritePrometheus(&bb, false)
+	if !strings.Contains(bb.String(), `vmalert_skipped_groups{type="vlogs"} 1`) {
+		t.Fatalf("expected vmalert_skipped_groups{type=\"vlogs\"} 1 in the output; got:\n%s", bb.String())
+	}
+
+	// enable all types and re-apply the config; the previously skipped group must appear now
+	f := flag.Lookup("rule.enabledRuleTypes")
+	*f.Value.(*flagutil.ArrayString) = nil
+	if err := m.update(context.Background(), cfg, false); err != nil {
+		t.Fatalf("failed to update after enabling all types: %s", err)
+	}
+	if len(m.groups) != 2 {
+		t.Fatalf("expected 2 groups to be loaded after enabling all types; got %d", len(m.groups))
+	}
 }

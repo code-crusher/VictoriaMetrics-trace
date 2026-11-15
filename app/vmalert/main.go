@@ -105,6 +105,10 @@ func main() {
 		logger.Fatalf("failed to init external.url %q: %s", *externalURL, err)
 	}
 
+	if err := config.ValidateEnabledRuleTypes(); err != nil {
+		logger.Fatalf("%s", err)
+	}
+
 	err = templates.Load(*ruleTemplatesPath, *extURL)
 	if err != nil {
 		logger.Fatalf("failed to load template %q: %s", *ruleTemplatesPath, err)

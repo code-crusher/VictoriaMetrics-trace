@@ -781,6 +781,14 @@ vmalert can be integrated with different data sources for alerting and recording
 configuring only one `datasource.url`. We recommend running separate instances of vmalert for each datasource type
 with the specified `-rule.defaultRuleType=<datasource_type>` command-line flag.
 
+If a single rule file contains groups of mixed types, you can tell vmalert which types are allowed to be evaluated with
+the `-rule.enabledRuleTypes` flag, e.g. `-rule.enabledRuleTypes=prometheus` (multiple values may be passed as a comma-separated list
+or via multiple flags, e.g. `-rule.enabledRuleTypes=prometheus,vlogs`). Groups whose `type` is not in the list are skipped
+and are not evaluated. By default the list is empty, which means that all the types are enabled. This is useful when the same
+rule files are shared between multiple vmalert instances working with different datasources.
+Skipped groups are logged at startup and on every config reload and are reported via the `vmalert_skipped_groups{type="<type>"}` metric,
+so it's always visible that some groups are not evaluated. Skipped groups are not present in the API, UI, or rule metrics.
+
 ###### VictoriaMetrics
 
 vmalert natively integrates with [VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/) for alerting and

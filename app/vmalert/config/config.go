@@ -15,10 +15,51 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/config/log"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/vmalertutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/envtemplate"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/flagutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promutil"
 )
 
 var defaultRuleType = flag.String("rule.defaultRuleType", "prometheus", `Default type for rule expressions, can be overridden via "type" parameter on the group level, see https://docs.victoriametrics.com/victoriametrics/vmalert/#groups. Supported values: "graphite", "prometheus" and "vlogs".`)
+
+var enabledRuleTypes = flagutil.NewArrayString("rule.enabledRuleTypes", `Comma-separated list of rule types to evaluate, for example -rule.enabledRuleTypes=prometheus or -rule.enabledRuleTypes=prometheus,vlogs.
+Groups of other types are skipped and are not evaluated. Supported values: "graphite", "prometheus" and "vlogs".
+Leaving the list empty means all rule types are enabled, which is the default.
+Skipped groups are reported via logs and the vmalert_skipped_groups metric.
+See https://docs.victoriametrics.com/victoriametrics/vmalert/#integrations for details.`)
+
+// EnabledRuleTypes returns the list of rule types that are allowed to be evaluated.
+// It returns an empty list if no value set for the -rule.enabledRuleTypes flag, which means all the types are enabled.
+func EnabledRuleTypes() []string {
+	types := []string(*enabledRuleTypes)
+	for i := range types {
+		types[i] = strings.TrimSpace(types[i])
+	}
+	return types
+}
+
+// RuleTypeEnabled reports whether rules of the given type are allowed to be evaluated.
+func RuleTypeEnabled(t Type) bool {
+	enabled := EnabledRuleTypes()
+	if len(enabled) == 0 {
+		return true
+	}
+	for _, s := range enabled {
+		if s == t.String() {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateEnabledRuleTypes checks that all the types set via -rule.enabledRuleTypes are supported.
+func ValidateEnabledRuleTypes() error {
+	for _, t := range EnabledRuleTypes() {
+		if !SupportedType(t) {
+			return fmt.Errorf("unsupported rule type %q set in -rule.enabledRuleTypes flag; supported values: \"graphite\", \"prometheus\" and \"vlogs\"", t)
+		}
+	}
+	return nil
+}
 
 // Group contains list of Rules grouped into
 // entity with one name and evaluation interval

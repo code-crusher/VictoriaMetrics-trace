@@ -448,6 +448,14 @@ See the docs at https://docs.victoriametrics.com/victoriametrics/vmalert/ .
      Each array item can contain comma inside single-quoted or double-quoted string, {}, [] and () braces.
   -rule.defaultRuleType string
      Default type for rule expressions, can be overridden via "type" parameter on the group level, see https://docs.victoriametrics.com/victoriametrics/vmalert/#groups. Supported values: "graphite", "prometheus" and "vlogs". (default "prometheus")
+  -rule.enabledRuleTypes array
+     Comma-separated list of rule types to evaluate, for example -rule.enabledRuleTypes=prometheus or -rule.enabledRuleTypes=prometheus,vlogs.
+     Groups of other types are skipped and are not evaluated. Supported values: "graphite", "prometheus" and "vlogs".
+     Leaving the list empty means all rule types are enabled, which is the default.
+     Skipped groups are reported via logs and the vmalert_skipped_groups metric.
+     See https://docs.victoriametrics.com/victoriametrics/vmalert/#integrations for details.
+     Supports an array of values separated by comma or specified via multiple flags.
+     Each array item can contain comma inside single-quoted or double-quoted string, {}, [] and () braces.
   -rule.evalDelay duration
      Adjustment of the 'time' parameter for rule evaluation requests to compensate intentional data delay from the datasource. Normally, should be equal to '-search.latencyOffset' (cmd-line flag configured for VictoriaMetrics single-node or vmselect). This doesn't apply to groups with eval_offset specified. (default 30s)
   -rule.maxResolveDuration duration
