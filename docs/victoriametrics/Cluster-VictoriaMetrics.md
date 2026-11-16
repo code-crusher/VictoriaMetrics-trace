@@ -369,6 +369,26 @@ such as [Google Compute Engine persistent disk](https://cloud.google.com/compute
 It also provides consistently high performance and [may be resized](https://cloud.google.com/compute/docs/disks/add-persistent-disk) without downtime.
 HDD-based persistent disks should be enough for the majority of use cases. It is recommended using durable replicated persistent volumes in Kubernetes.
 
+### Storage-level replication vs application-level replication
+
+When `vmstorage` data is durably replicated at the storage layer, it is recommended to keep the default `-replicationFactor=1`, i.e. to disable
+application-level replication. Relying on a single replication layer avoids paying the overlapping costs of both approaches at once:
+
+- Application-level replication (via `-replicationFactor`) is time-series aware: `vminsert` spreads copies of every ingested sample across distinct
+  `vmstorage` nodes, so data remains available for querying even when up to `N-1` `vmstorage` nodes are unavailable. But it multiplies CPU, RAM,
+  disk space and network bandwidth usage by up to `N` times and requires [deduplication](#deduplication) to be configured on `vmselect` nodes.
+
+- Storage-level replication (replicated persistent volumes in Kubernetes, such as cloud provider disks or solutions like [Longhorn](https://longhorn.io/))
+  is transparent to VictoriaMetrics: each `vmstorage` node keeps storing a single copy of every sample, so no additional CPU and RAM is spent on ingesting
+  and de-duplicating redundant copies, and `vmselect` reads each sample only once during querying. The trade-off is that it is not time-series aware -
+  a failed `vmstorage` node cannot be substituted by its replica at query time, since the replica lives behind the storage layer. It also adds
+  an extra component to operate and configure.
+
+In short, prefer storage-level replication with the default `-replicationFactor=1` when replicated durable persistent volumes are available,
+since it is simpler and more resource-efficient. Use application-level replication when replicated storage cannot be used - e.g. when `vmstorage` nodes
+run on local non-replicated disks, or when data must remain available for querying during `vmstorage` node failures. Both approaches can be combined
+when the data justifies the extra resource usage.
+
 ## Cluster resizing and scalability
 
 Make sure you read [capacity planning docs](https://docs.victoriametrics.com/victoriametrics/cluster-victoriametrics/#capacity-planning) first.
