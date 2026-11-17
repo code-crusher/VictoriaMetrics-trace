@@ -2298,7 +2298,9 @@ See also:
   is ingested into VictoriaMetrics. Make sure that data sources have synchronized time with VictoriaMetrics.
 
   If the gaps are related to irregular intervals between samples, then try adjusting `-search.minStalenessInterval` command-line flag
-  to value close to the maximum interval between samples.
+  to value close to the maximum interval between samples. Alternatively, try setting
+  `-search.ephemeralRangeQueryExtraJitterPercent` command-line flag to a value that covers the expected jitter
+  (for example, `50` to add 50% of the estimated scrape interval on top of the automatically calculated lookback window).
 
 * If you are switching from InfluxDB or TimescaleDB, then it may be needed to set `-search.setLookbackToStep` command-line flag.
   This suppresses default gap filling algorithm used by VictoriaMetrics - by default it assumes

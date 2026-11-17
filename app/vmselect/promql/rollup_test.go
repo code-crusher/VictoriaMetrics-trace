@@ -1,7 +1,9 @@
 package promql
 
 import (
+	"flag"
 	"math"
+	"strconv"
 	"testing"
 
 	"github.com/VictoriaMetrics/metricsql"
@@ -2066,4 +2068,62 @@ func TestRollupChangesWithStaleness(t *testing.T) {
 		timestampsExpected := []int64{0, 10e3, 20e3, 30e3, 40e3, 50e3, 60e3, 70e3, 80e3, 90e3, 100e3}
 		testRowsEqual(t, gotValues, rc.Timestamps, valuesExpected, timestampsExpected)
 	})
+}
+
+func TestRollupEphemeralRangeQueryExtraJitterPercent(t *testing.T) {
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8686
+	//
+	// A series scraped every 5 minutes with jitter can have some gaps between consecutive samples
+	// exceeding the built-in lookback interval for ephemeral points (scrapeInterval + some tolerance).
+	// This produces gaps on graphs. The -search.ephemeralRangeQueryExtraJitterPercent flag
+	// extends the lookback interval by the given percent of the estimated scrape interval,
+	// so those points are filled instead of returning gaps.
+	timestamps := []int64{0, 300000, 610000, 900000, 1380000, 1680000, 1990000, 2280000, 2580000, 2885000, 3180000}
+	values := []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+
+	setFlag := func(t *testing.T, value string) {
+		t.Helper()
+		orig := *ephemeralRangeQueryExtraJitterPercent
+		if err := flag.Set("search.ephemeralRangeQueryExtraJitterPercent", value); err != nil {
+			t.Fatalf("cannot set -search.ephemeralRangeQueryExtraJitterPercent: %s", err)
+		}
+		t.Cleanup(func() {
+			if err := flag.Set("search.ephemeralRangeQueryExtraJitterPercent", strconv.FormatFloat(orig, 'f', -1, 64)); err != nil {
+				t.Fatalf("cannot restore -search.ephemeralRangeQueryExtraJitterPercent: %s", err)
+			}
+		})
+	}
+
+	for _, extraPercent := range []string{"0", "50"} {
+		t.Run("extraPercent="+extraPercent, func(t *testing.T) {
+			setFlag(t, extraPercent)
+			rc := rollupConfig{
+				Func:               rollupDefault,
+				Start:              0,
+				End:                3180000,
+				Step:               60000,
+				Window:             0,
+				MaxPointsPerSeries: 1e4,
+				MayAdjustWindow:    true,
+				isDefaultRollup:    true,
+			}
+			rc.Timestamps = rc.getTimestamps()
+			gotValues, _ := rc.Do(nil, values, timestamps)
+			nanCount := 0
+			for _, v := range gotValues {
+				if math.IsNaN(v) {
+					nanCount++
+				}
+			}
+			if extraPercent == "0" {
+				if nanCount == 0 {
+					t.Fatalf("expected gaps (NaN values) without extra jitter percent, got none")
+				}
+				return
+			}
+			if nanCount != 0 {
+				t.Fatalf("expected no gaps (NaN values) with extra jitter percent=%s, got %d NaN values", extraPercent, nanCount)
+			}
+		})
+	}
 }

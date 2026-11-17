@@ -732,7 +732,10 @@ response, where most of them are `ephemeral`.
 Sometimes, the lookbehind window for locating the datapoint isn't big enough and the graph will contain a gap. For range
 queries, the lookbehind window isn't equal to the `step` parameter. It is calculated as the median of the intervals between
 the last 20 raw samples in the requested time range. In this way, VictoriaMetrics automatically adjusts the lookbehind
-window to fill gaps and detect stale series at the same time.
+window to fill gaps and detect stale series at the same time. If gaps are still observed for series collected with high
+jitter, the lookbehind window can be extended via the `-search.ephemeralRangeQueryExtraJitterPercent` command-line flag,
+which adds the given percentage of the estimated interval between samples on top of the automatically calculated lookbehind
+window. The static `-search.minStalenessInterval` flag can also be used to enforce a minimal lookbehind window.
 
 Range queries are mostly used for plotting time series data over specified time ranges. These queries are extremely
 useful in the following scenarios:

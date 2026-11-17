@@ -21,6 +21,14 @@ var minStalenessInterval = flag.Duration("search.minStalenessInterval", 0, "The 
 	"This flag could be useful for removing gaps on graphs generated from time series with irregular intervals between samples. "+
 	"See also '-search.maxStalenessInterval'")
 
+var ephemeralRangeQueryExtraJitterPercent = flag.Float64("search.ephemeralRangeQueryExtraJitterPercent", 0, "The extra percent added to the lookback interval used for filling ephemeral (missing) points "+
+	"during range queries when the raw sample falls just outside the normal lookback window. "+
+	"The lookback interval for ephemeral points is normally estimated as a 0.6 quantile of the intervals between the last raw samples, with some built-in tolerance for jitter. "+
+	"When samples are collected with high jitter, gaps may appear on graphs even though raw samples exist shortly outside the lookback interval. "+
+	"This flag extends the lookback interval by the given percent of the estimated scrape interval on top of the built-in tolerance. "+
+	"For example, setting this flag to 50 extends the lookback interval by 50% of the estimated scrape interval. "+
+	"See also '-search.minStalenessInterval' for a similar alternative, which sets a hard minimal value instead of a percentage.")
+
 var rollupFuncs = map[string]newRollupFunc{
 	"absent_over_time":        newRollupFuncOneArg(rollupAbsent),
 	"aggr_over_time":          newRollupFuncTwoArgs(rollupFake),
@@ -725,6 +733,10 @@ func (rc *rollupConfig) doInternal(dstValues []float64, tsm *timeseriesMap, valu
 	if rc.Start < rc.End {
 		scrapeInterval := getScrapeInterval(timestamps, rc.Step)
 		maxPrevInterval = getMaxPrevInterval(scrapeInterval)
+		if *ephemeralRangeQueryExtraJitterPercent > 0 {
+			extra := int64(float64(scrapeInterval) * *ephemeralRangeQueryExtraJitterPercent / 100)
+			maxPrevInterval += extra
+		}
 	}
 
 	if rc.LookbackDelta > 0 && maxPrevInterval > rc.LookbackDelta {

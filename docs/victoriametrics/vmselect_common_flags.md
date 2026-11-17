@@ -304,6 +304,8 @@ See the docs at https://docs.victoriametrics.com/victoriametrics/cluster-victori
      Whether to disable response caching. This may be useful when ingesting historical data. See https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#backfilling . See also -search.resetRollupResultCacheOnStartup
   -search.disableImplicitConversion
      Whether to return an error for queries that rely on implicit subquery conversions, see https://docs.victoriametrics.com/victoriametrics/metricsql/#subqueries for details. See also -search.logImplicitConversion.
+  -search.ephemeralRangeQueryExtraJitterPercent float
+     The extra percent added to the lookback interval used for filling ephemeral (missing) points during range queries when the raw sample falls just outside the normal lookback window. The lookback interval for ephemeral points is normally estimated as a 0.6 quantile of the intervals between the last raw samples, with some built-in tolerance for jitter. When samples are collected with high jitter, gaps may appear on graphs even though raw samples exist shortly outside the lookback interval. This flag extends the lookback interval by the given percent of the estimated scrape interval on top of the built-in tolerance. For example, setting this flag to 50 extends the lookback interval by 50% of the estimated scrape interval. See also '-search.minStalenessInterval' for a similar alternative, which sets a hard minimal value instead of a percentage (default 0)
   -search.graphiteMaxPointsPerSeries int
      The maximum number of points per series Graphite render API can return (default 1000000)
   -search.graphiteStorageStep duration

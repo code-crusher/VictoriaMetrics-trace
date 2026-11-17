@@ -139,8 +139,10 @@ If you see unexpected or unreliable query results from VictoriaMetrics, then try
    VictoriaMetrics automatically [fills the gaps](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#range-query)
    based on the median interval between [data samples](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#raw-samples).
    This may yield incorrect results for irregular data, as the median will be skewed. In this case, it is recommended to either fix the
-   irregularities or switch to the static interval for gaps filling by setting `-search.minStalenessInterval=5m` command-line flag (`5m` is
-   used by Prometheus by default).
+   irregularities, switch to the static interval for gaps filling by setting `-search.minStalenessInterval=5m` command-line flag (`5m` is
+   used by Prometheus by default), or extend the automatically calculated lookback window by setting
+   `-search.ephemeralRangeQueryExtraJitterPercent` to the percentage of the estimated scrape interval to add on top of it
+   (for example, `50` to add 50%).
 
 1. Sometimes, response caching may lead to unexpected results when samples with older timestamps
    are ingested into VictoriaMetrics (aka [backfilling](https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#backfilling)).
