@@ -9156,6 +9156,37 @@ func TestExecSuccess(t *testing.T) {
 		resultExpected := []netstorage.Result{r}
 		f(q, resultExpected)
 	})
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8850
+	t.Run(`rollup_rate() over aggregated series`, func(t *testing.T) {
+		t.Parallel()
+		// Four CPU cores. Core 0 is 100% busy during [1050s..1110s], while core 1 is 100% busy during [1300s..1360s].
+		// The busy intervals do not overlap, so at most a single core is busy at any moment in time.
+		m := `(label_set(time() - clamp_max(clamp_min(time() - 1050, 0), 60), "cpu", "0"), ` +
+			`label_set(time() - clamp_max(clamp_min(time() - 1300, 0), 60), "cpu", "1"), ` +
+			`label_set(time(), "cpu", "2"), label_set(time(), "cpu", "3"))`
+
+		// rollup_rate() is calculated individually per each series, so the resulting min per series
+		// is summed over all the cores. This over-counts cores, which were busy at different moments in time
+		// inside the lookbehind window - the result is 2 at [1400s..1600s], while at most one core was busy.
+		q := `sum(1 - rollup_rate(` + m + `[600s:10s], "min"))`
+		r := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{0, 1, 2, 2, 1, 0},
+			Timestamps: timestampsExpected,
+		}
+		f(q, []netstorage.Result{r})
+
+		// Aggregate the per-core rates before calculating the rollup, so the rollup is performed
+		// over the total number of busy cores at each point in time. This correctly detects
+		// the maximum number of cores, which were busy simultaneously.
+		q = `4 - rollup_rate(sum(` + m + `)[600s:10s], "min")`
+		r = netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{0, 1, 1, 1, 1, 0},
+			Timestamps: timestampsExpected,
+		}
+		f(q, []netstorage.Result{r})
+	})
 	t.Run(`rollup_scrape_interval()`, func(t *testing.T) {
 		t.Parallel()
 		q := `sort_by_label(rollup_scrape_interval(1[5m:10S]), "rollup")`

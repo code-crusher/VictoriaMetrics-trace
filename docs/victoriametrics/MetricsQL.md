@@ -873,6 +873,43 @@ Metric names are stripped from the resulting rollups. Add [keep_metric_names](#k
 
 This function is usually applied to [counters](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#counter).
 
+It is important to remember that `rollup_rate()` is calculated individually per each time series returned
+from [series_selector](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#filtering).
+If the results are aggregated afterwards, then `min` / `max` / `avg` rates are calculated per each series
+before the aggregation. This may return unexpected results when the aggregated series have peaks
+at different moments in time. For example, the query below is intended to return the number of CPU cores,
+which were 100% busy simultaneously during the last 5 minutes:
+
+```metricsql
+sum(1 - rollup_rate(node_cpu_seconds_total{mode="idle"}[5m], "min"))
+```
+
+If a 4-core host had 100% busy intervals on different cores during the last 5 minutes, but these intervals
+didn't overlap in time, then this query returns the number of cores with such intervals instead of `1`.
+The reason is that `rollup_rate(..., "min")` returns `0` for every core, which had a 100% busy interval
+inside the lookbehind window, and `sum()` just adds these zeroes.
+
+If the number of cores, which were busy simultaneously, is needed, then aggregate the per-core rates
+before calculating the rollup over the aggregated series, so the rollup is performed over the total
+number of busy cores at each point in time:
+
+```metricsql
+count(node_cpu_seconds_total{mode="idle"}) - rollup_rate(
+  sum(node_cpu_seconds_total{mode="idle"})[5m:10s], "min"
+)
+```
+
+The explicit `:10s` step in the subquery is required. Without it the subquery step is inherited from
+the outer query, so the rates would be averaged over the `step` value passed to
+[/api/v1/query_range](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#range-query)
+instead of the interval between [raw samples](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#raw-samples).
+Short spikes would be diluted in this case, so the result would depend on the `step` value.
+See [subqueries](#subqueries) for details.
+
+The same result can be obtained via the `sum(rate(...))` pattern, e.g. `min_over_time(sum(rate(m[1m]))[5m:10s])`.
+See [this article](https://www.robustperception.io/rate-then-sum-never-sum-then-rate/) for details
+on the `rate` then `sum` pattern.
+
 See also [rollup](#rollup) and [rollup_increase](#rollup_increase).
 
 #### rollup_scrape_interval
