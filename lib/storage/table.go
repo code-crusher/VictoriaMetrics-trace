@@ -398,13 +398,22 @@ func (tb *table) MustAddRows(rows []rawRow) {
 	tb.ptwsLock.Unlock()
 }
 
-// MustGetIndexDBIDByHour returns the id of the indexDB which contains the
-// provided hour. If the indexDB does not exist it will be created.
-func (tb *table) MustGetIndexDBIDByHour(hour uint64) uint64 {
-	ts := int64(hour * msecPerHour)
-	ptw := tb.MustGetPartition(ts)
-	defer tb.PutPartition(ptw)
-	return ptw.pt.idb.id
+// getIndexDBIDByHour returns the id of the indexDB which contains the
+// provided hour (as returned by fasttime.UnixHour()).
+// It returns 0 if the indexDB doesn't exist yet.
+//
+// It is used for caches that only need the indexDB id when the partition
+// already exists and must not create a new partition as a side effect.
+func (tb *table) getIndexDBIDByHour(hour uint64) uint64 {
+	ts := int64(hour) * 3600 * 1000
+	ptws := tb.GetAllPartitions(nil)
+	defer tb.PutPartitions(ptws)
+	for _, ptw := range ptws {
+		if ptw.pt.tr.contains(ts) {
+			return ptw.pt.idb.id
+		}
+	}
+	return 0
 }
 
 // getMinMaxRetentionTimestamps returns the minimum and maximum timestamps

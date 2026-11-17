@@ -271,6 +271,52 @@ func TestUpdateCurrHourMetricIDs(t *testing.T) {
 	})
 }
 
+func TestUpdateMetricIDsDoNotCreatePartitions(t *testing.T) {
+	// Regression test for https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8687:
+	// the background updaters for currHourMetricIDs and nextDayMetricIDs must
+	// not create partitions (and the indexDBs and goroutines that come with
+	// them) for hours/days that have no data yet. Partitions must be created
+	// lazily on the first data ingestion for them.
+	defer testRemoveAll(t)
+	t.Run("hour_updater", func(t *testing.T) {
+		s := MustOpenStorage(t.Name(), OpenOptions{})
+		defer s.MustClose()
+
+		// The storage on a fresh directory must not contain any partitions.
+		assertNoPartitions(t, s)
+
+		s.updateCurrHourMetricIDs(fasttime.UnixHour() + 1)
+		assertNoPartitions(t, s)
+	})
+	t.Run("next_day_updater", func(t *testing.T) {
+		s := MustOpenStorage(t.Name(), OpenOptions{})
+		defer s.MustClose()
+
+		assertNoPartitions(t, s)
+
+		now := time.Now().UTC()
+		// Use the timestamp of the last hour of the current month. The next day
+		// belongs to the next month partition, which is the partition the
+		// background updater used to create eagerly.
+		lastHourOfMonth := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Hour).Unix()
+		s.updateNextDayMetricIDs(uint64(lastHourOfMonth))
+		assertNoPartitions(t, s)
+	})
+}
+
+func assertNoPartitions(t *testing.T, s *Storage) {
+	t.Helper()
+	ptws := s.tb.GetAllPartitions(nil)
+	defer s.tb.PutPartitions(ptws)
+	if len(ptws) != 0 {
+		names := make([]string, 0, len(ptws))
+		for _, ptw := range ptws {
+			names = append(names, ptw.pt.name)
+		}
+		t.Fatalf("expected no partitions; got %d: %v", len(ptws), names)
+	}
+}
+
 func TestMetricRowMarshalUnmarshal(t *testing.T) {
 	var buf []byte
 	typ := reflect.TypeFor[*MetricRow]()

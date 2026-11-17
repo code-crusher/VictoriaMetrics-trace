@@ -676,10 +676,8 @@ func (s *Storage) UpdateMetrics(m *Metrics) {
 
 	hmCurr := s.currHourMetricIDs.Load()
 	hmPrev := s.prevHourMetricIDs.Load()
-	hourMetricIDsLen := max(hmCurr.m.Len(), hmPrev.m.Len())
-	m.HourMetricIDCacheSize += uint64(hourMetricIDsLen)
-	m.HourMetricIDCacheSizeBytes += hmCurr.m.SizeBytes()
-	m.HourMetricIDCacheSizeBytes += hmPrev.m.SizeBytes()
+	m.HourMetricIDCacheSize += uint64(max(hmCurr.Len(), hmPrev.Len()))
+	m.HourMetricIDCacheSizeBytes += hmCurr.SizeBytes() + hmPrev.SizeBytes()
 
 	nextDayMetricIDs := &s.nextDayMetricIDs.Load().metricIDs
 	m.NextDayMetricIDCacheSize += uint64(nextDayMetricIDs.Len())
@@ -892,9 +890,7 @@ func (s *Storage) mustLoadNextDayMetricIDs(timestamp uint64) *nextDayMetricIDs {
 		// and updateNextDayMetricIDs().
 		date--
 	}
-	ptw := s.tb.MustGetPartition(int64(date+1) * msecPerDay)
-	nextDayIDBID := ptw.pt.idb.id
-	s.tb.PutPartition(ptw)
+	nextDayIDBID := s.tb.getIndexDBIDByHour(uint64(date+1) * 24)
 	e := &nextDayMetricIDs{
 		// idbID field is used only to cache idb id for the next day to
 		// avoid getting it every time a new batch of metric rows is
@@ -940,10 +936,14 @@ func (s *Storage) mustLoadNextDayMetricIDs(timestamp uint64) *nextDayMetricIDs {
 func (s *Storage) mustLoadHourMetricIDs(hour uint64, name string) *hourMetricIDs {
 	hm := &hourMetricIDs{
 		hour:  hour,
-		idbID: s.tb.MustGetIndexDBIDByHour(hour),
+		m:     &uint64set.Set{},
+		idbID: s.tb.getIndexDBIDByHour(hour),
 	}
 	path := filepath.Join(s.cachePath, name)
 	if !fs.IsPathExist(path) {
+		// No cache file yet (e.g. on the first run or after the partition
+		// was created for the current hour). Return the set initialized
+		// above.
 		return hm
 	}
 	src, err := os.ReadFile(path)
@@ -1846,7 +1846,7 @@ func (s *Storage) add(rows []rawRow, dstMrs []*MetricRow, mrs []MetricRow, preci
 	hmCurr := s.currHourMetricIDs.Load()
 	var pendingHourEntries []uint64
 	addToPendingHourEntries := func(hour, metricID uint64) {
-		if hour == hmCurr.hour && !hmCurr.m.Has(metricID) {
+		if hour == hmCurr.hour && !hmCurr.has(metricID) {
 			pendingHourEntries = append(pendingHourEntries, metricID)
 		}
 	}
@@ -2278,7 +2278,10 @@ func (s *Storage) updatePerDateData(rows []rawRow, mrs []*MetricRow, hmPrev, hmC
 		prevDate = date
 		prevMetricID = metricID
 
-		if hmCurr.idbID == nextDayIDBID && pMin > 0 && hour == currentHour {
+		// hmCurr.idbID is 0 when the partition for the current hour
+		// doesn't exist yet (this may happen right after the storage is
+		// opened). Do not prefill anything in this case.
+		if hmCurr.idbID != 0 && nextDayIDBID != 0 && hmCurr.idbID == nextDayIDBID && pMin > 0 && hour == currentHour {
 			// Gradually pre-populate per-day inverted index for the next day during the last hour of the current day.
 			// This should reduce CPU usage spike and slowdown at the beginning of the next day
 			// when entries for all the active time series must be added to the index.
@@ -2309,14 +2312,14 @@ func (s *Storage) updatePerDateData(rows []rawRow, mrs []*MetricRow, hmPrev, hmC
 			continue
 		}
 
-		if date == hmCurrDate && hmCurr.m.Has(metricID) {
+		if date == hmCurrDate && hmCurr.has(metricID) {
 			// Fast path: the metricID is in the current hour cache.
 			// This means the metricID has been already added to per-day
 			// inverted index.
 			continue
 		}
 
-		if date == hmPrevDate && hmPrev.m.Has(metricID) {
+		if date == hmPrevDate && hmPrev.has(metricID) {
 			// Fast path: the metricID is already registered for its day on the
 			// previous hour.
 			continue
@@ -2455,9 +2458,18 @@ type nextDayMetricIDs struct {
 // See updatePerDateData().
 func (s *Storage) updateNextDayMetricIDs(timestamp uint64) {
 	date := timestamp / (3600 * 24)
-	ptw := s.tb.MustGetPartition(int64(date+1) * msecPerDay)
-	nextDayIDBID := ptw.pt.idb.id
-	s.tb.PutPartition(ptw)
+	// Get the next day indexDB id if the partition for the next day
+	// already exists. Do not create the next day partition here since this
+	// would create an empty partition (with its own indexDB, index caches
+	// and background goroutines) about a day before it is needed. The
+	// partition for the next day is created lazily on the first data
+	// ingestion for it, or by prefillNextIndexDB for the first day of
+	// the next month.
+	//
+	// A zero nextDayIDBID disables the next-day prefill in
+	// updatePerDateData() until the partition is created and the cache is
+	// updated on the next run of this function.
+	nextDayIDBID := s.tb.getIndexDBIDByHour(uint64(date+1) * 24)
 	e := s.nextDayMetricIDs.Load()
 	s.pendingNextDayMetricIDsLock.Lock()
 	pendingMetricIDs := s.pendingNextDayMetricIDs
@@ -2479,7 +2491,16 @@ func (s *Storage) updateNextDayMetricIDs(timestamp uint64) {
 
 	// Not comparing indexDB IDs because different idb ids imply different date.
 	if pendingMetricIDs.Len() == 0 && e.date == date {
-		// Fast path: nothing to update.
+		// Fast path: nothing to update except refreshing the cached indexDB
+		// id if it changed (e.g. the partition was created after the cache
+		// was loaded).
+		if nextDayIDBID != 0 && e.idbID != nextDayIDBID {
+			s.nextDayMetricIDs.Store(&nextDayMetricIDs{
+				idbID:     nextDayIDBID,
+				date:      e.date,
+				metricIDs: e.metricIDs,
+			})
+		}
 		return
 	}
 
@@ -2521,33 +2542,72 @@ func (s *Storage) updateCurrHourMetricIDs(hour uint64) {
 	s.pendingHourEntriesLock.Unlock()
 
 	if newMetricIDs.Len() == 0 && hm.hour == hour {
-		// Fast path: nothing to update.
+		// Fast path: nothing to update except possibly healing the cached
+		// indexDB id if the partition was created after the currHourMetricIDs
+		// cache was loaded.
+		if hm.idbID == 0 {
+			if idbID := s.tb.getIndexDBIDByHour(hour); idbID != 0 {
+				s.currHourMetricIDs.Store(&hourMetricIDs{
+					m:     hm.m,
+					hour:  hm.hour,
+					idbID: idbID,
+				})
+			}
+		}
 		return
 	}
 
 	// Slow path: hm.m must be updated with non-empty s.pendingHourEntries.
-	idbID := hm.idbID
-	var m *uint64set.Set
+	var hmNew *hourMetricIDs
 	if hm.hour == hour {
-		m = hm.m.Clone()
+		m := hm.m.Clone()
+		if m == nil {
+			m = &uint64set.Set{}
+		}
 		m.Union(newMetricIDs)
+		// Heal the cached idb id in case the partition was created after
+		// the currHourMetricIDs cache was loaded.
+		idbID := hm.idbID
+		if idbID == 0 {
+			idbID = s.tb.getIndexDBIDByHour(hour)
+		}
+		hmNew = &hourMetricIDs{
+			m:     m,
+			hour:  hm.hour,
+			idbID: idbID,
+		}
 	} else {
-		idbID = s.tb.MustGetIndexDBIDByHour(hour)
-		m = newMetricIDs
+		m := newMetricIDs
 		if hour%24 == 0 {
 			// Do not add pending metricIDs from the previous hour to the current hour on the next day,
 			// since this may result in missing registration of the metricIDs in the per-day inverted index.
 			// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/3309
 			m = &uint64set.Set{}
 		}
-	}
-	hmNew := &hourMetricIDs{
-		m:     m,
-		hour:  hour,
-		idbID: idbID,
+		// Do not create the partition for the new hour here if it doesn't
+		// exist yet. The partition is created lazily on the first data
+		// ingestion for this hour, or by prefillNextIndexDB for the first
+		// hour of the next month. Creating it here would create an extra
+		// partition (and its indexDB and background goroutines) during
+		// every rotation even if no data is ingested during this hour.
+		idbID := s.tb.getIndexDBIDByHour(hour)
+		// If the partition for the new hour isn't created yet, leave the
+		// cache entries in place but set idbID to 0 - this disables the
+		// next-day prefill for the new hour until the partition is
+		// created (usually by the first data ingestion for this hour).
+		// Do not create the partition here - creating it would produce
+		// an empty partition (with its own indexDB, index caches and
+		// background goroutines) for every rotation even if no data is
+		// ingested during this hour.
+		hmNew = &hourMetricIDs{
+			m:     m,
+			hour:  hour,
+			idbID: idbID,
+		}
 	}
 	s.currHourMetricIDs.Store(hmNew)
 	if hm.hour != hour {
+		// Move the old current hour metricIDs to prevHourMetricIDs.
 		s.prevHourMetricIDs.Store(hm)
 	}
 }
@@ -2556,6 +2616,27 @@ type hourMetricIDs struct {
 	m     *uint64set.Set
 	hour  uint64
 	idbID uint64
+}
+
+func (hm *hourMetricIDs) Len() int {
+	if hm == nil || hm.m == nil {
+		return 0
+	}
+	return hm.m.Len()
+}
+
+func (hm *hourMetricIDs) SizeBytes() uint64 {
+	if hm == nil || hm.m == nil {
+		return 0
+	}
+	return hm.m.SizeBytes()
+}
+
+func (hm *hourMetricIDs) has(metricID uint64) bool {
+	if hm == nil || hm.m == nil {
+		return false
+	}
+	return hm.m.Has(metricID)
 }
 
 type legacyTSID struct {
