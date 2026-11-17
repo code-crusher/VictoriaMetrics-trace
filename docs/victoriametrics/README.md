@@ -931,6 +931,8 @@ The specification of VictoriaMetrics' native format may yet change and is not fo
 
 If you have a native format file obtained via [/api/v1/export/native](#how-to-export-data-in-native-format) however this is the most efficient protocol for importing data in.
 
+The [lib/protoparser/native/writer](https://github.com/VictoriaMetrics/VictoriaMetrics/tree/master/lib/protoparser/native/writer) Go package can be used for building native format streams in external applications without running VictoriaMetrics components. It produces the same binary layout as `/api/v1/export/native`, so the resulting stream can be sent to `/api/v1/import/native` directly. This is the recommended way to import data at high rates (e.g. millions of samples per second) from custom Go clients, since the native format is the most efficient protocol for importing data.
+
 ```sh
 # Export the data from <source-victoriametrics>:
 curl http://source-victoriametrics:8428/api/v1/export/native -d 'match={__name__!=""}' > exported_data.bin
