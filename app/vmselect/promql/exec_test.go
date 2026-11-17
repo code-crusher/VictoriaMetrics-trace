@@ -9103,10 +9103,14 @@ func TestExecSuccess(t *testing.T) {
 	})
 	t.Run(`rollup_rate()`, func(t *testing.T) {
 		t.Parallel()
+		// The subquery samples beyond ec.End do not affect the results,
+		// since only intervals between adjacent samples inside the query
+		// time range are taken into account.
+		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8850
 		q := `rollup_rate((2200-time())[600s])`
 		r1 := netstorage.Result{
 			MetricName: metricNameExpected,
-			Values:     []float64{6, 5, 4, 3, 2, 1},
+			Values:     []float64{6, 5, 4, 3, 2, 1.3333333333333333},
 			Timestamps: timestampsExpected,
 		}
 		r1.MetricName.Tags = []storage.Tag{{
@@ -9124,7 +9128,7 @@ func TestExecSuccess(t *testing.T) {
 		}}
 		r3 := netstorage.Result{
 			MetricName: metricNameExpected,
-			Values:     []float64{5, 4, 3, 2, 1, 0},
+			Values:     []float64{5, 4, 3, 2, 1, 1},
 			Timestamps: timestampsExpected,
 		}
 		r3.MetricName.Tags = []storage.Tag{{
@@ -9150,7 +9154,7 @@ func TestExecSuccess(t *testing.T) {
 		q := `rollup_rate((2200-time())[600s], "avg")`
 		r := netstorage.Result{
 			MetricName: metricNameExpected,
-			Values:     []float64{6, 5, 4, 3, 2, 1},
+			Values:     []float64{6, 5, 4, 3, 2, 1.3333333333333333},
 			Timestamps: timestampsExpected,
 		}
 		resultExpected := []netstorage.Result{r}

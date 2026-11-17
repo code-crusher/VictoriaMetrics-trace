@@ -1078,6 +1078,18 @@ func evalRollupFuncWithSubquery(qt *querytracer.Tracer, ec *EvalConfig, funcName
 	seriesByWorkerID := tsw.byWorkerID
 	doParallel(tssSQ, func(tsSQ *timeseries, values []float64, timestamps []int64, workerID uint) ([]float64, []int64) {
 		values, timestamps = removeNanValues(values[:0], timestamps[:0], tsSQ.Values, tsSQ.Timestamps)
+		// The subquery is evaluated on the time range [ecSQ.Start ... ecSQ.End], which is extended
+		// beyond ec.End in order to guarantee that the aligned subquery grid covers ec.End.
+		// The extended subquery samples may be built from raw samples, which are located before
+		// the extended range (e.g. when the series ends at ec.End, the extended subquery samples
+		// just repeat the last raw sample). Drop such samples beyond ec.End before calculating
+		// rollups, since they may skew results for functions, which use adjacent sample pairs
+		// such as rollup_rate, rollup_deriv, rollup_increase or rollup_delta.
+		// This also aligns the realNextValue for the last output point with the case
+		// when the rollup function is calculated over raw samples, since only raw samples
+		// from [minTimestamp ... ec.End] are used there.
+		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8850
+		values, timestamps = trimValuesAfterTimestamp(values, timestamps, ec.End)
 		preFunc(values, timestamps)
 		for _, rc := range rcs {
 			if tsm := newTimeseriesMap(funcName, keepMetricNames, sharedTimestamps, &tsSQ.MetricName); tsm != nil {
@@ -1172,6 +1184,19 @@ func removeNanValues(dstValues []float64, dstTimestamps []int64, values []float6
 		dstTimestamps = append(dstTimestamps, timestamps[i])
 	}
 	return dstValues, dstTimestamps
+}
+
+// trimValuesAfterTimestamp removes samples with timestamps exceeding maxTimestamp from the given
+// values and timestamps. It is expected that timestamps are sorted in ascending order.
+func trimValuesAfterTimestamp(values []float64, timestamps []int64, maxTimestamp int64) ([]float64, []int64) {
+	if len(timestamps) == 0 || timestamps[len(timestamps)-1] <= maxTimestamp {
+		// Fast path: nothing to trim.
+		return values, timestamps
+	}
+	idx := sort.Search(len(timestamps), func(i int) bool {
+		return timestamps[i] > maxTimestamp
+	})
+	return values[:idx], timestamps[:idx]
 }
 
 // evalInstantRollup evaluates instant rollup where ec.Start == ec.End.
