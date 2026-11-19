@@ -1997,6 +1997,30 @@ For example, `sort_by_label(foo, "bar")` would sort `foo` series by values of th
 
 See also [sort_by_label](#sort_by_label) and [sort_by_label_numeric_desc](#sort_by_label_numeric_desc).
 
+#### sort_by_label_fqdn
+
+`sort_by_label_fqdn(q, "label1", ... "labelN")` is [label manipulation function](#label-manipulation-functions), which sorts series in ascending order by the given set of labels
+by comparing the label values as hierarchical domain names: the last dot-separated component is compared first, then the previous one and so on.
+For example, if `foo` series have `instance` label with values `a.example.com`, `b.example.com`, `a.foo.example.com` and `b.other.org`,
+then `sort_by_label_fqdn(foo, "instance")` would return series in the following order of `instance` label values:
+`a.example.com`, `b.example.com`, `a.foo.example.com` and `b.other.org`. Such sorting keeps series with related domain names close to each other.
+
+Note that the whole last dot-separated component is compared first. If the label values contain `host:port` pairs,
+then the port is a part of the last component, so it participates in the comparison. Strip it with [label_replace](#label_replace)
+before sorting if this isn't the desired behavior.
+
+See also [sort_by_label_fqdn_desc](#sort_by_label_fqdn_desc) and [sort_by_label](#sort_by_label).
+
+#### sort_by_label_fqdn_desc
+
+`sort_by_label_fqdn_desc(q, "label1", ... "labelN")` is [label manipulation function](#label-manipulation-functions), which sorts series in descending order by the given set of labels
+by comparing the label values as hierarchical domain names: the last dot-separated component is compared first, then the previous one and so on.
+For example, if `foo` series have `instance` label with values `a.example.com`, `b.example.com`, `a.foo.example.com` and `b.other.org`,
+then `sort_by_label_fqdn_desc(foo, "instance")` would return series in the following order of `instance` label values:
+`b.other.org`, `a.foo.example.com`, `b.example.com` and `a.example.com`.
+
+See also [sort_by_label_fqdn](#sort_by_label_fqdn) and [sort_by_label_desc](#sort_by_label_desc).
+
 #### sort_by_label_numeric
 
 `sort_by_label_numeric(q, "label1", ... "labelN")` is [label manipulation function](#label-manipulation-functions), which sorts series in ascending order by the given set of labels

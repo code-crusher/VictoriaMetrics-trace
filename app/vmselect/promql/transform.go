@@ -121,6 +121,8 @@ var transformFuncs = map[string]transformFunc{
 	"sort":                       newTransformFuncSort(false),
 	"sort_by_label":              newTransformFuncSortByLabel(false),
 	"sort_by_label_desc":         newTransformFuncSortByLabel(true),
+	"sort_by_label_fqdn":         newTransformFuncSortByLabelFqdn(false),
+	"sort_by_label_fqdn_desc":    newTransformFuncSortByLabelFqdn(true),
 	"sort_by_label_numeric":      newTransformFuncNumericSort(false),
 	"sort_by_label_numeric_desc": newTransformFuncNumericSort(true),
 	"sort_desc":                  newTransformFuncSort(true),
@@ -2490,6 +2492,63 @@ func newTransformFuncNumericSort(isDesc bool) transformFunc {
 		})
 		return rvs, nil
 	}
+}
+
+func newTransformFuncSortByLabelFqdn(isDesc bool) transformFunc {
+	return func(tfa *transformFuncArg) ([]*timeseries, error) {
+		args := tfa.args
+		if len(args) < 2 {
+			return nil, fmt.Errorf("expecting at least 2 args; got %d args", len(args))
+		}
+		var labels []string
+		for i, arg := range args[1:] {
+			label, err := getString(arg, i+1)
+			if err != nil {
+				return nil, fmt.Errorf("cannot parse label #%d for sorting: %w", i+1, err)
+			}
+			labels = append(labels, label)
+		}
+		rvs := args[0]
+		sort.SliceStable(rvs, func(i, j int) bool {
+			for _, label := range labels {
+				a := bytesutil.ToUnsafeString(rvs[i].MetricName.GetTagValue(label))
+				b := bytesutil.ToUnsafeString(rvs[j].MetricName.GetTagValue(label))
+				if a == b {
+					continue
+				}
+				if isDesc {
+					return fqdnLess(b, a)
+				}
+				return fqdnLess(a, b)
+			}
+			return false
+		})
+		return rvs, nil
+	}
+}
+
+// fqdnLess returns true if a is less than b when comparing them as hierarchical domain names:
+// the last dot-separated component is compared first, then the previous one and so on.
+// This keeps series with related domain names close to each other.
+// For example, foo.example.com < bar.example.com < foo.example.org.
+func fqdnLess(a, b string) bool {
+	for a != "" || b != "" {
+		aTail, aRest := cutLastDomainComponent(a)
+		bTail, bRest := cutLastDomainComponent(b)
+		if aTail != bTail {
+			return aTail < bTail
+		}
+		a, b = aRest, bRest
+	}
+	return false
+}
+
+// cutLastDomainComponent splits s into the last dot-separated component and the remaining part.
+func cutLastDomainComponent(s string) (component, rest string) {
+	if n := strings.LastIndexByte(s, '.'); n >= 0 {
+		return s[n+1:], s[:n]
+	}
+	return s, ""
 }
 
 func numericLess(a, b string) bool {

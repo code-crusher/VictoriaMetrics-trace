@@ -394,3 +394,50 @@ func TestNumericLess(t *testing.T) {
 	f("-"+big, big, true)
 	f(big, "-"+big, false)
 }
+
+func TestFqdnLess(t *testing.T) {
+	f := func(a, b string, want bool) {
+		t.Helper()
+		if got := fqdnLess(a, b); got != want {
+			t.Fatalf("unexpected fqdnLess(%q, %q): got %v; want %v", a, b, got, want)
+		}
+	}
+	// empty strings
+	f("", "", false)
+	f("", "com", true)
+	f("com", "", false)
+	// single labels
+	f("foo", "bar", false)
+	f("bar", "foo", true)
+	f("foo", "foo", false)
+	// fqdns with the same TLD - the last component is compared first
+	f("foo.example.com", "bar.example.com", false)
+	f("bar.example.com", "foo.example.com", true)
+	f("foo.example.com", "foo.example.org", true)
+	f("foo.example.org", "foo.example.com", false)
+	// hosts in the same sub-domain are close to each other
+	f("b.example.com", "a.example.com", false)
+	f("a.example.com", "b.example.com", true)
+	// different number of components
+	// The series with fewer components goes first when other components are equal:
+	// `com.example` < `com.example.a` after reversing.
+	f("a.example.com", "example.com", false)
+	f("example.com", "a.example.com", true)
+	// hosts with ports
+	f("a.example.com:8080", "b.example.com:80", false)
+	f("a.example.com:80", "a.example.com:8080", true)
+	f("a.example.com:8080", "a.example.com:80", false)
+	// trailing dot
+	f("example.com", "example.com.", false)
+	f("example.com.", "example.com", true)
+	// The reversed trailing dot sorts before any component - the same as in
+	// `s.split(".").reverse().join(".")` comparison from the issue.
+	f("a.example.com.", "b.example.com", true)
+	f("b.example.com", "a.example.com.", false)
+	// values which are not domain names at all must be sorted without panics
+	f("1.2.3.4", "1.2.3.5", true)
+	f("1.2.3.4", "1.2.3.40", true)
+	f("/var/lib", "/var/log", true)
+	f("x", "x.y", true)
+	f("x.y", "x", false)
+}

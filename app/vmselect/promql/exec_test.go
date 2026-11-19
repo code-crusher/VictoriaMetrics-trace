@@ -2807,6 +2807,180 @@ func TestExecSuccess(t *testing.T) {
 		resultExpected := []netstorage.Result{r1, r2}
 		f(q, resultExpected)
 	})
+	t.Run(`sort_by_label_fqdn()`, func(t *testing.T) {
+		t.Parallel()
+		q := `sort_by_label_fqdn((
+			alias(1, "host1.sub.example.com"),
+			alias(2, "api.example.com"),
+			alias(3, "api.other.org"),
+			alias(4, "host2.sub.example.com"),
+		), "__name__")`
+		// The sort is done by the reversed domain name, so the expected order is
+		// by com.example.api, com.example.sub.host1, com.example.sub.host2 and org.other.api.
+		// This keeps all the hosts in the same domain close to each other.
+		r1 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{2, 2, 2, 2, 2, 2},
+			Timestamps: timestampsExpected,
+		}
+		r1.MetricName.MetricGroup = []byte("api.example.com")
+		r2 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{1, 1, 1, 1, 1, 1},
+			Timestamps: timestampsExpected,
+		}
+		r2.MetricName.MetricGroup = []byte("host1.sub.example.com")
+		r3 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{4, 4, 4, 4, 4, 4},
+			Timestamps: timestampsExpected,
+		}
+		r3.MetricName.MetricGroup = []byte("host2.sub.example.com")
+		r4 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{3, 3, 3, 3, 3, 3},
+			Timestamps: timestampsExpected,
+		}
+		r4.MetricName.MetricGroup = []byte("api.other.org")
+		resultExpected := []netstorage.Result{r1, r2, r3, r4}
+		f(q, resultExpected)
+	})
+	t.Run(`sort_by_label_fqdn_desc()`, func(t *testing.T) {
+		t.Parallel()
+		q := `sort_by_label_fqdn_desc((
+			alias(1, "host1.sub.example.com"),
+			alias(2, "api.example.com"),
+			alias(3, "api.other.org"),
+			alias(4, "host2.sub.example.com"),
+		), "__name__")`
+		r1 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{3, 3, 3, 3, 3, 3},
+			Timestamps: timestampsExpected,
+		}
+		r1.MetricName.MetricGroup = []byte("api.other.org")
+		r2 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{4, 4, 4, 4, 4, 4},
+			Timestamps: timestampsExpected,
+		}
+		r2.MetricName.MetricGroup = []byte("host2.sub.example.com")
+		r3 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{1, 1, 1, 1, 1, 1},
+			Timestamps: timestampsExpected,
+		}
+		r3.MetricName.MetricGroup = []byte("host1.sub.example.com")
+		r4 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{2, 2, 2, 2, 2, 2},
+			Timestamps: timestampsExpected,
+		}
+		r4.MetricName.MetricGroup = []byte("api.example.com")
+		resultExpected := []netstorage.Result{r1, r2, r3, r4}
+		f(q, resultExpected)
+	})
+	t.Run(`sort_by_label_fqdn(multiple_labels)`, func(t *testing.T) {
+		t.Parallel()
+		q := `sort_by_label_fqdn((
+			label_set(1, "instance", "host1.sub.example.com", "job", "z"),
+			label_set(2, "instance", "host3.example.com", "job", "z"),
+			label_set(3, "instance", "host2.sub.example.com", "job", "a"),
+		), "job", "instance")`
+		r1 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{3, 3, 3, 3, 3, 3},
+			Timestamps: timestampsExpected,
+		}
+		r1.MetricName.Tags = []storage.Tag{
+			{
+				Key:   []byte("instance"),
+				Value: []byte("host2.sub.example.com"),
+			},
+			{
+				Key:   []byte("job"),
+				Value: []byte("a"),
+			},
+		}
+		r2 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{2, 2, 2, 2, 2, 2},
+			Timestamps: timestampsExpected,
+		}
+		r2.MetricName.Tags = []storage.Tag{
+			{
+				Key:   []byte("instance"),
+				Value: []byte("host3.example.com"),
+			},
+			{
+				Key:   []byte("job"),
+				Value: []byte("z"),
+			},
+		}
+		r3 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{1, 1, 1, 1, 1, 1},
+			Timestamps: timestampsExpected,
+		}
+		r3.MetricName.Tags = []storage.Tag{
+			{
+				Key:   []byte("instance"),
+				Value: []byte("host1.sub.example.com"),
+			},
+			{
+				Key:   []byte("job"),
+				Value: []byte("z"),
+			},
+		}
+		resultExpected := []netstorage.Result{r1, r2, r3}
+		f(q, resultExpected)
+	})
+	t.Run(`sort_by_label_fqdn(ports in instance label)`, func(t *testing.T) {
+		t.Parallel()
+		// The whole last dot-separated component is compared first, so the port
+		// in `host:port` values participates in the comparison.
+		// Here `com:5432` < `com:80` < `com:8080`.
+		q := `sort_by_label_fqdn((
+			label_set(1, "instance", "db.example.com:5432"),
+			label_set(2, "instance", "api.example.com:8080"),
+			label_set(3, "instance", "web.example.com:80"),
+		), "instance")`
+		r1 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{1, 1, 1, 1, 1, 1},
+			Timestamps: timestampsExpected,
+		}
+		r1.MetricName.Tags = []storage.Tag{
+			{
+				Key:   []byte("instance"),
+				Value: []byte("db.example.com:5432"),
+			},
+		}
+		r2 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{3, 3, 3, 3, 3, 3},
+			Timestamps: timestampsExpected,
+		}
+		r2.MetricName.Tags = []storage.Tag{
+			{
+				Key:   []byte("instance"),
+				Value: []byte("web.example.com:80"),
+			},
+		}
+		r3 := netstorage.Result{
+			MetricName: metricNameExpected,
+			Values:     []float64{2, 2, 2, 2, 2, 2},
+			Timestamps: timestampsExpected,
+		}
+		r3.MetricName.Tags = []storage.Tag{
+			{
+				Key:   []byte("instance"),
+				Value: []byte("api.example.com:8080"),
+			},
+		}
+		resultExpected := []netstorage.Result{r1, r2, r3}
+		f(q, resultExpected)
+	})
 	t.Run(`scalar < time()`, func(t *testing.T) {
 		t.Parallel()
 		q := `123 < time()`
@@ -10544,6 +10718,8 @@ func TestExecError(t *testing.T) {
 	f(`sort_desc()`)
 	f(`sort_by_label()`)
 	f(`sort_by_label_desc()`)
+	f(`sort_by_label_fqdn()`)
+	f(`sort_by_label_fqdn_desc()`)
 	f(`sort_by_label_numeric()`)
 	f(`sort_by_label_numeric_desc()`)
 	f(`timestamp()`)

@@ -108,6 +108,7 @@ func maySortResults(e metricsql.Expr) bool {
 		switch strings.ToLower(v.Name) {
 		case "sort", "sort_desc", "limit_offset",
 			"sort_by_label", "sort_by_label_desc",
+			"sort_by_label_fqdn", "sort_by_label_fqdn_desc",
 			"sort_by_label_numeric", "sort_by_label_numeric_desc":
 			// Results already sorted
 			return false
