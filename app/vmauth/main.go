@@ -513,6 +513,7 @@ func processRequest(w http.ResponseWriter, r *http.Request, ui *UserInfo, tkn *j
 
 		bu.setBroken()
 		ui.backendErrors.Inc()
+		bu.incBackendErrors()
 	}
 	err := &httpserver.ErrorWithStatusCode{
 		Err:        fmt.Errorf("all the %d backends for the user %q are unavailable for proxying the request - check previous WARN logs to see the exact error for each failed backend", up.getBackendsCount(), userName),
@@ -524,6 +525,7 @@ func processRequest(w http.ResponseWriter, r *http.Request, ui *UserInfo, tkn *j
 
 func tryProcessingRequest(w http.ResponseWriter, r *http.Request, targetURL *url.URL, hc HeadersConf, retryStatusCodes []int, ui *UserInfo, bu *backendURL) (bool, bool) {
 	ui.backendRequests.Inc()
+	bu.incBackendRequests()
 
 	bb, bbOK := r.Body.(*bufferedBody)
 	canRetry := !bbOK || bb.canRetry()
@@ -573,6 +575,7 @@ func tryProcessingRequest(w http.ResponseWriter, r *http.Request, targetURL *url
 			ui.backendErrors.Inc()
 			ui.requestErrors.Inc()
 			bu.setBroken()
+			bu.incBackendErrors()
 			return true, false
 		}
 		if netutil.IsTrivialNetworkError(err) {
@@ -598,6 +601,7 @@ func tryProcessingRequest(w http.ResponseWriter, r *http.Request, targetURL *url
 			httpserver.Errorf(w, r, "%s", err)
 			ui.backendErrors.Inc()
 			ui.requestErrors.Inc()
+			bu.incBackendErrors()
 			return true, false
 		}
 
@@ -627,6 +631,7 @@ func tryProcessingRequest(w http.ResponseWriter, r *http.Request, targetURL *url
 		requestURI := httpserver.GetRequestURI(r)
 		logger.Warnf("remoteAddr: %s; requestURI: %s; error when proxying response body from %s: %s", remoteAddr, requestURI, targetURL, err)
 		ui.requestErrors.Inc()
+		bu.incBackendErrors()
 		return true, false
 	}
 	return true, false

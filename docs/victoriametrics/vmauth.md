@@ -1858,6 +1858,29 @@ users:
 * `vmauth_unauthorized_user_concurrent_requests_capacity` [gauge](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#gauge) - the maximum number of [concurrent requests](#concurrency-limiting) for unauthorized user
 * `vmauth_unauthorized_user_concurrent_requests_current` [gauge](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#gauge) - the current number of [concurrent requests](#concurrency-limiting) for unauthorized user
 
+`vmauth` exports the following metrics for each backend host defined in [`-auth.config`](#auth-config):
+
+* `vmauth_backend_up` [gauge](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#gauge) - `1` if the backend is available, `0` if the backend is temporarily broken
+* `vmauth_backend_requests_total` [counter](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#counter) - the number of requests sent to the backend
+* `vmauth_backend_errors_total` [counter](https://docs.victoriametrics.com/victoriametrics/keyconcepts/#counter) - the number of failed requests sent to the backend
+
+These metrics contain the `backend` label, which is set to the `host:port` part of the backend url.
+For example, the following config exposes `vmauth_backend_up{backend="vmselect:8481"}` and `vmauth_backend_up{backend="vminsert:8480"}` metrics:
+
+```yaml
+unauthorized_user:
+  url_prefix:
+  - "http://vmselect:8481"
+  - "http://vminsert:8480"
+```
+
+All the requests sent to the backend are counted at `vmauth_backend_requests_total` metric of this backend,
+including the requests, which were re-tried at other backends because of errors.
+The failed requests are counted at `vmauth_backend_errors_total` metric of the backend they failed at.
+The backend is marked as broken for [`-failTimeout`](#load-balancing) duration after the failure,
+so `vmauth_backend_up` is set to `0` for this backend during this period.
+When the same host is used by multiple users, the metrics for it are shared.
+
 ## How to build from sources
 
 It is recommended to use [binary releases](https://github.com/VictoriaMetrics/VictoriaMetrics/releases/latest) - `vmauth` is located in `vmutils-*` archives there.

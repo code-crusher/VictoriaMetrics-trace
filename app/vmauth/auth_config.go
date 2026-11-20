@@ -388,6 +388,12 @@ type URLPrefix struct {
 	// The next deadline for DNS-based discovery of backend IPs
 	nextDiscoveryDeadline atomic.Uint64
 
+	// bmByHost holds per-backend metrics indexed by the backend host from bus.
+	// It is used for assigning metrics to dynamically discovered backends
+	// and for unregistering metrics from the previously discovered backends.
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8292
+	bmByHost map[string]*backendMetrics
+
 	// vOriginal contains the original yaml value for URLPrefix.
 	vOriginal any
 }
@@ -467,6 +473,12 @@ type backendURL struct {
 	url *url.URL
 
 	hasPlaceHolders bool
+
+	// bm holds per-backend metrics for the backend at url.
+	// It is shared among all the backendURLs pointing to the same backend.
+	// It may be nil if per-backend metrics aren't initialized yet.
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8292
+	bm *backendMetrics
 }
 
 func (bu *backendURL) isBroken() bool {
@@ -475,9 +487,18 @@ func (bu *backendURL) isBroken() bool {
 
 func (bu *backendURL) setBroken() {
 	if bu.broken.CompareAndSwap(false, true) {
+		if bm := bu.bm; bm != nil {
+			// The backend is temporarily unavailable.
+			// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8292
+			bm.broken.Add(1)
+		}
 		bu.bhc.run(func() {
 			bu.runHealthCheck()
 			bu.broken.Store(false)
+			if bm := bu.bm; bm != nil {
+				// The backend became available again.
+				bm.broken.Add(-1)
+			}
 		})
 	}
 }
@@ -522,6 +543,22 @@ func (bu *backendURL) get() {
 
 func (bu *backendURL) put() {
 	bu.concurrentRequests.Add(-1)
+}
+
+// incBackendRequests increments the counter of the requests sent to the backend.
+// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8292
+func (bu *backendURL) incBackendRequests() {
+	if bm := bu.bm; bm != nil {
+		bm.requests.Inc()
+	}
+}
+
+// incBackendErrors increments the counter of the failed requests sent to the backend.
+// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8292
+func (bu *backendURL) incBackendErrors() {
+	if bm := bu.bm; bm != nil {
+		bm.errors.Inc()
+	}
 }
 
 func (up *URLPrefix) getBackendsCount() int {
@@ -632,10 +669,16 @@ func (up *URLPrefix) discoverBackendAddrsIfNeeded() {
 	busNew := newBackendURLs()
 	for _, bu := range up.busOriginal {
 		host := bu.Hostname()
+		// All the discovered addresses of the same host share per-backend metrics
+		// registered for this host, so the metrics cardinality remains stable
+		// when the set of the discovered addresses changes.
+		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8292
+		bm := up.bmByHost[bu.Host]
 		for _, addr := range hostToAddrs[host] {
 			buCopy := *bu
 			buCopy.Host = addr
 			busNew.add(&buCopy)
+			busNew.bus[len(busNew.bus)-1].bm = bm
 		}
 	}
 
@@ -986,6 +1029,10 @@ func reloadAuthConfigData(data []byte) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to parse users from auth config: %w", err)
 	}
+
+	// Register per-backend metrics for all the backends defined in ac.
+	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8292
+	ac.initBackendMetrics()
 
 	acPrev := authConfig.Load()
 	if acPrev != nil {

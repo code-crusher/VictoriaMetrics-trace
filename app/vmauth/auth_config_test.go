@@ -950,6 +950,11 @@ func TestBrokenBackend(t *testing.T) {
 			t.Fatalf("unexpected broken backend %q", b.url)
 		}
 	}
+
+	// Stop the health check goroutine started by setBroken() above,
+	// so it doesn't outlive the test and doesn't read the global flags
+	// and the logger state while the other tests are running.
+	pbus.stopHealthChecks()
 }
 
 func TestDiscoverBackendIPsWithEnableTCP6(t *testing.T) {
