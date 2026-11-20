@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -195,6 +196,17 @@ func (sw *ScrapeWork) key() string {
 // Job returns job for the ScrapeWork
 func (sw *ScrapeWork) Job() string {
 	return sw.Labels.Get("job")
+}
+
+// getMetricsPath returns the URL path used for scraping the target (e.g. `/metrics`).
+func (sw *ScrapeWork) getMetricsPath() string {
+	u, err := url.Parse(sw.ScrapeURL)
+	if err != nil {
+		// ScrapeURL is already validated at scrape work creation time,
+		// so this error should be unreachable.
+		return ""
+	}
+	return u.Path
 }
 
 type scrapeWork struct {
@@ -1072,6 +1084,18 @@ func (wc *writeRequestCtx) addAutoMetrics(sw *scrapeWork, am *autoMetrics, times
 	}
 	dst = appendRow(dst, "scrape_timeout_seconds", sw.Config.ScrapeTimeout.Seconds(), timestamp)
 	dst = appendRow(dst, "up", float64(am.up), timestamp)
+
+	if labelName := *autoMetricsPathLabel; len(labelName) > 0 {
+		// Add the label with the metrics path to the auto metrics, so they do not clash
+		// for targets, which are scraped at the same port with different metrics_path.
+		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8000
+		if metricsPath := sw.Config.getMetricsPath(); len(metricsPath) > 0 {
+			tags := []parser.Tag{{Key: labelName, Value: metricsPath}}
+			for i := range dst {
+				dst[i].Tags = tags
+			}
+		}
+	}
 
 	err := wc.addRows(sw.Config, dst, timestamp, false)
 	if err != nil {

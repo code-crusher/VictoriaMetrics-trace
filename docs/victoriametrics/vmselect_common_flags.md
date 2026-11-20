@@ -160,6 +160,8 @@ See the docs at https://docs.victoriametrics.com/victoriametrics/cluster-victori
      Items in the previous caches are removed when the percent of requests it serves becomes lower than this value. Higher values reduce memory usage at the cost of higher CPU usage. See also -cacheExpireDuration (default 0.1)
   -promscrape.azureSDCheckInterval duration
      Interval for checking for changes in Azure. This works only if azure_sd_configs is configured in '-promscrape.config' file. See https://docs.victoriametrics.com/victoriametrics/sd_configs/#azure_sd_configs for details (default 1m0s)
+  -promscrape.autoMetricsPathLabel string
+     If non-empty, then the label with this name and the value of the metrics path (e.g. '/metrics') is added to the automatically generated metrics such as 'up' or 'scrape_samples_scraped'. This allows distinguishing auto metrics for targets, which are scraped by the same job at the same port, but at different metrics_path. See https://docs.victoriametrics.com/victoriametrics/vmagent/#automatically-generated-metrics for details
   -promscrape.cluster.memberLabel string
      If non-empty, then the label with this name and the -promscrape.cluster.memberNum value is added to all the scraped metrics. See https://docs.victoriametrics.com/victoriametrics/vmagent/#scraping-big-number-of-targets for more info
   -promscrape.cluster.memberNum string

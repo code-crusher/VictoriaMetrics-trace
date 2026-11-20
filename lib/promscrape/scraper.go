@@ -51,6 +51,10 @@ var (
 
 	fileSDCheckInterval = flag.Duration("promscrape.fileSDCheckInterval", time.Minute, "Interval for checking for changes in 'file_sd_config'. "+
 		"See https://docs.victoriametrics.com/victoriametrics/sd_configs/#file_sd_configs for details")
+	autoMetricsPathLabel = flag.String("promscrape.autoMetricsPathLabel", "", "If non-empty, then the label with this name and the value of "+
+		"the metrics path (e.g. '/metrics') is added to the automatically generated metrics such as 'up' or 'scrape_samples_scraped'. "+
+		"This allows distinguishing auto metrics for targets, which are scraped by the same job at the same port, but at different metrics_path. "+
+		"See https://docs.victoriametrics.com/victoriametrics/vmagent/#automatically-generated-metrics for details")
 )
 
 // CheckConfig checks -promscrape.config for errors and unsupported options.

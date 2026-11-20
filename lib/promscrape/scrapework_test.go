@@ -47,6 +47,23 @@ func TestIsAutoMetric(t *testing.T) {
 	f("upx", false)
 }
 
+func TestGetMetricsPath(t *testing.T) {
+	f := func(scrapeURL, resultExpected string) {
+		t.Helper()
+		sw := &ScrapeWork{ScrapeURL: scrapeURL}
+		result := sw.getMetricsPath()
+		if result != resultExpected {
+			t.Fatalf("unexpected result for getMetricsPath(%q); got %q; want %q", scrapeURL, result, resultExpected)
+		}
+	}
+	f("http://host:80/metrics", "/metrics")
+	f("http://host:80/internal-metrics", "/internal-metrics")
+	f("http://host/metrics/container", "/metrics/container")
+	f("http://host:80/metrics?query=args", "/metrics")
+	f("http://host:80", "")
+	f("", "")
+}
+
 func TestAppendExtraLabels(t *testing.T) {
 	f := func(sourceLabels, extraLabels string, honorLabels bool, resultExpected string) {
 		t.Helper()
@@ -648,6 +665,114 @@ func testScrapeWorkScrapeInternalSuccess(t *testing.T, streamParse bool) {
 		scrape_series_limit_samples_dropped 1 123
 		scrape_timeout_seconds 42 123
 	`, []prompb.MetricMetadata{})
+}
+
+// TestScrapeWorkAutoMetricsPathLabel verifies that the auto metrics for targets,
+// which share the same labels but are scraped at different paths, do not clash
+// when -promscrape.autoMetricsPathLabel command-line flag is set.
+//
+// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8000
+func TestScrapeWorkAutoMetricsPathLabel(t *testing.T) {
+	f := func(streamParse bool) {
+		t.Helper()
+
+		originValue := *autoMetricsPathLabel
+		*autoMetricsPathLabel = "metrics_path"
+		defer func() {
+			*autoMetricsPathLabel = originValue
+		}()
+
+		// Both scrape works share the same labels, but they are scraped at different paths.
+		// This mimics a single ServiceMonitor/PodMonitor with multiple endpoints
+		// listening to the same port with different metrics_path.
+		newScrapeWork := func(metricsPath string) *scrapeWork {
+			var sw scrapeWork
+			sw.Config = &ScrapeWork{
+				ScrapeURL:     "http://10.0.0.1:9110" + metricsPath,
+				ScrapeTimeout: time.Second * 42,
+				StreamParse:   streamParse,
+				MaxScrapeSize: maxScrapeSize.N,
+				Labels: promutil.NewLabelsFromMap(map[string]string{
+					"instance": "10.0.0.1:9110",
+					"job":      "default/mon",
+				}),
+			}
+			return &sw
+		}
+
+		var pushDataMu sync.Mutex
+		upByPath := make(map[string]float64)
+		// upSeries is incremented for every `up` series pushed by both scrape works.
+		upSeries := 0
+		pushData := func(_ *auth.Token, wr *prompb.WriteRequest) {
+			pushDataMu.Lock()
+			defer pushDataMu.Unlock()
+			for i := range wr.Timeseries {
+				ts := &wr.Timeseries[i]
+				var name, path string
+				for _, label := range ts.Labels {
+					switch label.Name {
+					case "__name__":
+						name = label.Value
+					case "metrics_path":
+						path = label.Value
+					}
+				}
+				if name != "up" {
+					continue
+				}
+				upSeries++
+				if len(path) == 0 {
+					t.Errorf("missing metrics_path label in the pushed `up` series: %v", ts.Labels)
+					return
+				}
+				upByPath[path] = ts.Samples[0].Value
+			}
+		}
+
+		timestamp := int64(123000)
+		if streamParse {
+			protoparserutil.StartUnmarshalWorkers()
+			defer protoparserutil.StopUnmarshalWorkers()
+		}
+		for _, sw := range []*scrapeWork{newScrapeWork("/metrics"), newScrapeWork("/internal-metrics")} {
+			sw.PushData = pushData
+			readDataCalls := 0
+			sw.ReadData = func(dst *chunkedbuffer.Buffer) (bool, error) {
+				readDataCalls++
+				dst.MustWrite([]byte("foo 1\n"))
+				return false, nil
+			}
+			tsmGlobal.Register(sw)
+			if err := sw.scrapeInternal(timestamp, timestamp); err != nil {
+				t.Fatalf("unexpected error: %s", err)
+			}
+			tsmGlobal.Unregister(sw)
+			if readDataCalls != 1 {
+				t.Fatalf("unexpected number of readData calls; got %d; want %d", readDataCalls, 1)
+			}
+		}
+
+		// Verify that the auto metrics for both paths were pushed
+		// and that they have distinct label sets.
+		if upSeries != 2 {
+			t.Fatalf("unexpected number of pushed `up` series; got %d; want 2", upSeries)
+		}
+		if len(upByPath) != 2 {
+			t.Fatalf("unexpected number of `up` series with distinct metrics_path label values; got %d; want 2", len(upByPath))
+		}
+		for path, up := range upByPath {
+			if up != 1 {
+				t.Fatalf("unexpected `up` value for metrics_path=%q; got %v; want 1", path, up)
+			}
+		}
+	}
+
+	// one-shot mode
+	f(false)
+
+	// stream mode
+	f(true)
 }
 
 // TestScrapeWorkScrapeInternalStreamConcurrency ensures that streaming parsing with concurrency

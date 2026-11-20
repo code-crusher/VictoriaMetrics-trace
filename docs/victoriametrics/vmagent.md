@@ -833,6 +833,13 @@ This detects targets exposing more metrics than the configured `sample_limit`. F
 If the target exports metrics with names that clash with the automatically generated metric names, then `vmagent` automatically
 prefixes `exported_` to these metric names, so they don't clash with automatically generated metric names.
 
+If a single scrape config discovers multiple targets with identical label sets, which are scraped at the same port but
+at different paths (e.g. when a single ServiceMonitor or PodMonitor contains multiple endpoints with the same port
+and different `metrics_path`), then the automatically generated metrics for these targets clash with each other.
+Pass `-promscrape.autoMetricsPathLabel=metrics_path` command-line flag to `vmagent` in order to add the `metrics_path` label
+with the scrape path to the automatically generated metrics, so they no longer clash.
+See [this issue](https://github.com/VictoriaMetrics/VictoriaMetrics/issues/8000) for details.
+
 Relabeling defined in `relabel_configs` or `metric_relabel_configs` of the scrape config isn't applied to automatically
 generated metrics. But they still can be relabeled via `-remoteWrite.relabelConfig` before sending metrics to the remote address.
 
