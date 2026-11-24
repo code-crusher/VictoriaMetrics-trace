@@ -1166,7 +1166,7 @@
                   "mode": "none"
                 },
                 "thresholdsStyle": {
-                  "mode": "off"
+                  "mode": "line"
                 }
               },
               "links": [],
@@ -1176,11 +1176,16 @@
                 "mode": "absolute",
                 "steps": [
                   {
-                    "color": "green"
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.5
                   },
                   {
                     "color": "red",
-                    "value": 80
+                    "value": 0.8
                   }
                 ]
               },
@@ -1281,7 +1286,7 @@
                   "mode": "none"
                 },
                 "thresholdsStyle": {
-                  "mode": "off"
+                  "mode": "line"
                 }
               },
               "links": [],
@@ -1291,11 +1296,16 @@
                 "mode": "absolute",
                 "steps": [
                   {
-                    "color": "green"
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.5
                   },
                   {
                     "color": "red",
-                    "value": 80
+                    "value": 0.9
                   }
                 ]
               },
@@ -1398,7 +1408,7 @@
                   "mode": "none"
                 },
                 "thresholdsStyle": {
-                  "mode": "off"
+                  "mode": "line"
                 }
               },
               "links": [],
@@ -1408,11 +1418,16 @@
                 "mode": "absolute",
                 "steps": [
                   {
-                    "color": "green"
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.5
                   },
                   {
                     "color": "red",
-                    "value": 80
+                    "value": 0.8
                   }
                 ]
               },
@@ -2103,7 +2118,7 @@
                   "mode": "none"
                 },
                 "thresholdsStyle": {
-                  "mode": "off"
+                  "mode": "line"
                 }
               },
               "decimals": 3,
@@ -2114,11 +2129,16 @@
                 "mode": "absolute",
                 "steps": [
                   {
-                    "color": "green"
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.8
                   },
                   {
                     "color": "red",
-                    "value": 80
+                    "value": 0.95
                   }
                 ]
               },
@@ -2330,11 +2350,8 @@
                 "mode": "absolute",
                 "steps": [
                   {
-                    "color": "green"
-                  },
-                  {
-                    "color": "red",
-                    "value": 80
+                    "color": "green",
+                    "value": 0
                   }
                 ]
               },

@@ -471,6 +471,7 @@ clean-checkers: remove-golangci-lint remove-govulncheck
 
 test:
 	go test -tags 'synctest' ./lib/... ./app/...
+	$(MAKE) dashboards-test
 
 test-race:
 	go test -tags 'synctest' -race ./lib/... ./app/...

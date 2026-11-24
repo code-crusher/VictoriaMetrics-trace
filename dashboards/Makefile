@@ -18,3 +18,9 @@ dashboards-sync:
 	SRC=operator.json D_UID=1H179hunk TITLE="VictoriaMetrics - operator" $(MAKE) dashboard-copy
 	SRC=backupmanager.json D_UID=gF-lxRdVz TITLE="VictoriaMetrics - backupmanager" $(MAKE) dashboard-copy
 	SRC=clusterbytenant.json D_UID=IZFqd3lMz TITLE="VictoriaMetrics Cluster Per Tenant Statistic" $(MAKE) dashboard-copy
+
+# Validates the dashboards: JSON structure, sane thresholds and synchronization
+# between the Prometheus-datasource dashboards and their vm/ copies.
+dashboards-test:
+	go test ./dashboards/...
+
