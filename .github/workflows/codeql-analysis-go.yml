@@ -54,7 +54,7 @@ jobs:
           restore-keys: go-artifacts-${{ runner.os }}-codeql-analyze-${{ steps.go.outputs.go-version }}-
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v4.37.9
+        uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26  # v4.39.2
         with:
           languages: go
 
